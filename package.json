@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/Zleman/pointflow.git"
   },
-  "homepage": "https://github.com/Zleman/pointflow#readme",
+  "homepage": "https://pointflow-docs.vercel.app",
   "bugs": {
     "url": "https://github.com/Zleman/pointflow/issues"
   },
