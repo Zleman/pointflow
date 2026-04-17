@@ -1,7 +1,7 @@
 # PointFlow
 
 <p align="center">
-  <img src="assets/pointflow_logo_transparent.png" alt="PointFlow logo" height="80" />
+  <img src="https://raw.githubusercontent.com/Zleman/pointflow/main/assets/pointflow_logo_transparent.png" alt="PointFlow logo" height="80" />
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
 
 > Benchmarked on i7-13700HX · RTX 4060 Laptop · Chrome 147 · Windows 11
 
-![PointFlow demo](assets/PointFlow_v0.1.0_Demo.gif)
+![PointFlow demo](https://raw.githubusercontent.com/Zleman/pointflow/main/assets/PointFlow_v0.1.0_Demo.gif)
 
 Render live point cloud streams in React without frame drops, memory spikes, or browser stalls — up to 1M+ points, WebGPU-accelerated, with automatic WebGL fallback.
 
