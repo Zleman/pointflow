@@ -1,0 +1,285 @@
+.hero {
+  padding: clamp(3.25rem, 7vw, 5.25rem) 1.5rem clamp(3rem, 6vw, 4.25rem);
+  text-align: center;
+  background: linear-gradient(
+    168deg,
+    color-mix(in srgb, var(--ifm-navbar-background-color) 88%, var(--ifm-color-primary)) 0%,
+    var(--ifm-background-color) 42%,
+    var(--ifm-background-surface-color) 100%
+  );
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+
+:global(html[data-theme="light"]) .hero {
+  background: linear-gradient(
+    168deg,
+    var(--ifm-background-surface-color) 0%,
+    color-mix(in srgb, var(--ifm-background-color) 92%, var(--ifm-color-primary)) 48%,
+    var(--ifm-background-color) 100%
+  );
+}
+
+.heroInner {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.heroLogo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  margin-bottom: 1.5rem;
+  filter: drop-shadow(
+    0 10px 28px color-mix(in srgb, var(--ifm-color-primary) 28%, transparent)
+  );
+}
+
+.heroTitle {
+  font-size: clamp(2rem, 4.5vw, 2.85rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--ifm-heading-color);
+  margin: 0 0 0.65rem;
+  line-height: 1.12;
+}
+
+.heroTagline {
+  font-size: clamp(1rem, 2.2vw, 1.12rem);
+  color: var(--ifm-color-content-secondary);
+  margin: 0 auto 1.35rem;
+  max-width: 34rem;
+  line-height: 1.6;
+}
+
+.heroStats {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--ifm-color-content-secondary);
+  margin-bottom: 1.85rem;
+  flex-wrap: wrap;
+  letter-spacing: 0.02em;
+}
+
+.statChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ifm-color-primary) 28%, var(--ifm-toc-border-color));
+  background: color-mix(in srgb, var(--ifm-background-surface-color) 82%, transparent);
+  color: var(--ifm-color-content-secondary);
+  line-height: 1.2;
+}
+
+:global(html[data-theme="dark"]) .statChip {
+  background: color-mix(in srgb, var(--ifm-background-surface-color) 70%, transparent);
+}
+
+.heroCta {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1.25rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none !important;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s,
+    color 0.15s,
+    transform 0.12s;
+  line-height: 1.2;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btnPrimary {
+  background: var(--ifm-color-primary);
+  color: #fff !important;
+  border: 1px solid transparent;
+}
+
+.btnPrimary:hover {
+  filter: brightness(1.08);
+}
+
+.btnOutline {
+  background: color-mix(in srgb, var(--ifm-background-surface-color) 65%, transparent);
+  color: var(--ifm-color-primary) !important;
+  border: 1px solid color-mix(in srgb, var(--ifm-color-primary) 45%, var(--ifm-toc-border-color));
+}
+
+.btnOutline:hover {
+  background: color-mix(in srgb, var(--ifm-color-primary) 14%, var(--ifm-background-surface-color));
+  border-color: var(--ifm-color-primary);
+  color: var(--ifm-color-primary-darker) !important;
+}
+
+:global(html[data-theme="dark"]) .btnOutline:hover {
+  color: var(--ifm-color-primary-lightest) !important;
+}
+
+.installLine {
+  font-size: 0.8125rem;
+  color: var(--ifm-color-content-secondary);
+}
+
+.installLine code {
+  background: var(--ifm-code-background);
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.84em;
+  color: var(--ifm-color-content);
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.features {
+  padding: clamp(3rem, 6vw, 4.5rem) 1.5rem;
+  background: var(--ifm-background-color);
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 996px) {
+  .featureGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .featureGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.featureCard {
+  padding: 1.35rem 1.4rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 10px;
+  background: var(--ifm-background-surface-color);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.featureCard:hover {
+  border-color: color-mix(in srgb, var(--ifm-color-primary) 55%, var(--ifm-toc-border-color));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ifm-color-primary) 12%, transparent);
+}
+
+.featureTitle {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0 0 0.45rem;
+  color: var(--ifm-heading-color);
+}
+
+.featureDesc {
+  font-size: 0.84rem;
+  line-height: 1.62;
+  color: var(--ifm-color-content-secondary);
+  margin: 0;
+}
+
+.codeSection {
+  padding: clamp(3rem, 6vw, 4.5rem) 1.5rem;
+  border-top: 1px solid var(--ifm-toc-border-color);
+  background: var(--ifm-background-surface-color);
+}
+
+.codeSectionInner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(2rem, 5vw, 3.5rem);
+  align-items: center;
+}
+
+@media (max-width: 768px) {
+  .codeSectionInner {
+    grid-template-columns: 1fr;
+    gap: 1.75rem;
+  }
+}
+
+.codeSectionText {
+  min-width: 0;
+}
+
+.codeSectionTitle {
+  font-size: clamp(1.45rem, 3vw, 1.85rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin: 0 0 0.65rem;
+  color: var(--ifm-heading-color);
+}
+
+.codeSectionSub {
+  font-size: 0.94rem;
+  color: var(--ifm-color-content-secondary);
+  line-height: 1.62;
+  margin: 0 0 1.35rem;
+}
+
+.codeBlock {
+  margin: 0;
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--ifm-color-primary) 10%, transparent);
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 480px) {
+  .heroCta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .statChip {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.45rem;
+  }
+
+  .installLine code {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: break-word;
+    word-break: break-all;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn:hover {
+    transform: none;
+  }
+}

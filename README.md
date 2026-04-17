@@ -12,6 +12,8 @@
 <p align="center">
   <a href="https://pointflow-demo.vercel.app"><strong>Live demo</strong></a>
   &nbsp;·&nbsp;
+  <a href="https://pointflow-docs.vercel.app"><strong>Documentation</strong></a>
+  &nbsp;·&nbsp;
   <a href="https://www.npmjs.com/package/pointflow"><strong>npm</strong></a>
   &nbsp;·&nbsp;
   <a href="https://github.com/Zleman/pointflow"><strong>GitHub</strong></a>
