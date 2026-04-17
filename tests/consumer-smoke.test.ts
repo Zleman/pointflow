@@ -8,7 +8,7 @@ describe("consumer smoke imports", () => {
     expect(dts).toContain("PointCloudDropzone");
     expect(dts).toContain("mergeChunkStreams");
     expect(dts).toContain("usePointCloudSession");
-    expect(dts).toContain('export * from "./config"');
+    expect(dts).toContain('export * from "./config/index.js"');
   });
 
   test("laz subpath declaration exports laz loader", () => {
@@ -24,6 +24,6 @@ describe("consumer smoke imports", () => {
 
   test("config subpath declaration exports config helpers", () => {
     const dts = readFileSync(resolve(process.cwd(), "dist/config/index.d.ts"), "utf8");
-    expect(dts).toContain('export * from "./pointflow-config"');
+    expect(dts).toContain('export * from "./pointflow-config.js"');
   });
 });
