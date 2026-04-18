@@ -162,6 +162,7 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
   const unavailableFramesRef     = useRef(0);
   const fallbackRequestedRef     = useRef(false);
   const lastSeenResetVersionRef  = useRef(0);
+  const prevColorByForUploadRef  = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     // ── Incremental ingest callback ──────────────────────────────────────
@@ -360,7 +361,28 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
           if (attrMin < gpuAttrMinRef.current) gpuAttrMinRef.current = attrMin;
           if (attrMax > gpuAttrMaxRef.current) gpuAttrMaxRef.current = attrMax;
         }
+        prevColorByForUploadRef.current = propsRef.current.colorBy;
         newDataSinceDispatch.current = true;
+      } else if (
+        gpuInitializedRef.current &&
+        p.expensivePassesEnabled &&
+        p.colorBy !== prevColorByForUploadRef.current
+      ) {
+        prevColorByForUploadRef.current = p.colorBy;
+        const cap = p.isDynamicAlloc ? p.getBufferCapacity() : p.maxCapacity;
+        if (posVec4Ref.current === null || posVec4Ref.current.length < cap * 4) {
+          posVec4Ref.current  = new Float32Array(cap * 4);
+          attrFlatRef.current = new Float32Array(Math.max(cap, 1));
+        }
+        const { count, attrMin, attrMax } = p.copySoAForGPU(
+          posVec4Ref.current, attrFlatRef.current!, p.colorBy
+        );
+        if (count > 0) {
+          uploadFullData(state.device, state.gpuBuffers, posVec4Ref.current, attrFlatRef.current!, count);
+          gpuAttrMinRef.current = attrMin;
+          gpuAttrMaxRef.current = attrMax;
+          newDataSinceDispatch.current = true;
+        }
       }
 
       cam.updateMatrixWorld();

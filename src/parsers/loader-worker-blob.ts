@@ -424,43 +424,81 @@ self.onmessage = async function(e) {
       return;
     }
 
-    // LAS: buffer the full file (fixed-length point records, header contains bounds).
     if (isLas) {
-      var lasBuffer = await response.arrayBuffer();
-      var lasBytes  = new Uint8Array(lasBuffer);
-      var lasHeader = parseLasHeader(lasBytes);
+      var lasReader  = response.body.getReader();
+      var lasCarry   = new Uint8Array(0);
+      var lasHdr     = null;
+      var lasTotal   = 0;
+      var lasParsed  = 0;
 
-      if (!lasHeader) {
-        throw new Error('Not a valid LAS file — LASF signature not found in first 4 bytes.');
-      }
-      if (lasHeader.isLaz) {
-        throw new Error(
-          'LAZ (compressed) files require laz-perf. ' +
-          'Convert with PDAL: pdal translate input.laz output.las'
-        );
+      while (true) {
+        var lasRead = await lasReader.read();
+        if (lasRead.value) lasCarry = concatBytes(lasCarry, lasRead.value);
+
+        if (!lasHdr) {
+          if (lasCarry.length < 100 && !lasRead.done) continue;
+          if (lasCarry.length >= 100) {
+            var odView  = new DataView(lasCarry.buffer, lasCarry.byteOffset, lasCarry.byteLength);
+            var needLen = Math.max(375, odView.getUint32(96, true));
+            if (lasCarry.length < needLen && !lasRead.done) continue;
+          }
+
+          lasHdr = parseLasHeader(lasCarry);
+          if (!lasHdr) throw new Error('Not a valid LAS file — LASF signature not found in first 4 bytes.');
+          if (lasHdr.isLaz) throw new Error(
+            'LAZ (compressed) files require laz-perf. ' +
+            'Import from "pointflow/laz" and pass loaderFactory={createLazLoader} to your component.'
+          );
+
+          lasTotal = lasHdr.pointCount;
+          self.postMessage({
+            type: 'HEADER',
+            vertexCount: lasTotal,
+            attributeKeys: lasHdr.attributeKeys,
+            format: 'las/' + lasHdr.pointFormat,
+            coordinateOffset: [lasHdr.centroidX, lasHdr.centroidY, lasHdr.centroidZ]
+          });
+
+          lasCarry = lasCarry.length > lasHdr.offsetToData
+            ? lasCarry.slice(lasHdr.offsetToData)
+            : new Uint8Array(0);
+        }
+
+        var recLen       = lasHdr.pointRecLen;
+        var completeRecs = Math.min(Math.floor(lasCarry.length / recLen), lasTotal - lasParsed);
+
+        if (completeRecs > 0) {
+          var usedBytes = completeRecs * recLen;
+          var lasSlice  = lasCarry.buffer.slice(lasCarry.byteOffset, lasCarry.byteOffset + usedBytes);
+          lasCarry      = lasCarry.slice(usedBytes);
+
+          var sliceHdr = {
+            offsetToData: 0, pointFormat: lasHdr.pointFormat, pointRecLen: recLen,
+            scaleX: lasHdr.scaleX, scaleY: lasHdr.scaleY, scaleZ: lasHdr.scaleZ,
+            offsetX: lasHdr.offsetX, offsetY: lasHdr.offsetY, offsetZ: lasHdr.offsetZ,
+            centroidX: lasHdr.centroidX, centroidY: lasHdr.centroidY, centroidZ: lasHdr.centroidZ,
+            attributeKeys: lasHdr.attributeKeys
+          };
+
+          var sliceIdx = 0, rem = completeRecs;
+          while (rem > 0) {
+            var lasCount = Math.min(chunkSize, rem);
+            var lasChunk = emitLasChunk(lasSlice, sliceHdr, sliceIdx, lasCount);
+            lasParsed += lasCount;
+            sliceIdx  += lasCount;
+            rem       -= lasCount;
+            var lasProgress = lasTotal > 0 ? lasParsed / lasTotal : 1;
+            self.postMessage(
+              { type: 'CHUNK', xyz: lasChunk.xyz, attributes: lasChunk.attributes, count: lasCount, progress: lasProgress },
+              lasChunk.transfers
+            );
+            await new Promise(function(r) { setTimeout(r, 0); });
+          }
+        }
+
+        if (lasRead.done || lasParsed >= lasTotal) break;
       }
 
-      self.postMessage({
-        type: 'HEADER',
-        vertexCount: lasHeader.pointCount,
-        attributeKeys: lasHeader.attributeKeys,
-        format: 'las/' + lasHeader.pointFormat,
-        coordinateOffset: [lasHeader.centroidX, lasHeader.centroidY, lasHeader.centroidZ]
-      });
-
-      var lasTotal  = lasHeader.pointCount;
-      var lasParsed = 0;
-      while (lasParsed < lasTotal) {
-        var lasCount    = Math.min(chunkSize, lasTotal - lasParsed);
-        var lasChunk    = emitLasChunk(lasBuffer, lasHeader, lasParsed, lasCount);
-        lasParsed      += lasCount;
-        var lasProgress = lasTotal > 0 ? lasParsed / lasTotal : 1;
-        self.postMessage(
-          { type: 'CHUNK', xyz: lasChunk.xyz, attributes: lasChunk.attributes, count: lasCount, progress: lasProgress },
-          lasChunk.transfers
-        );
-        await new Promise(function(r) { setTimeout(r, 0); });
-      }
       self.postMessage({ type: 'DONE', totalParsed: lasParsed });
       return;
     }
