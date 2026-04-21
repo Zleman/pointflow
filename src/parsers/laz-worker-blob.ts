@@ -51,6 +51,20 @@ const LAZ_WORKER_SCRIPT_BODY = /* javascript */ `
 var _lazMod = createLazPerf({ wasmBinary: _lazWasmB64 });
 var _lazReady = _lazMod["ready"];
 
+async function _resolveLazModule() {
+  var m = await Promise.resolve(_lazMod);
+  if (m && typeof m.ChunkDecoder === 'function') return m;
+  if (m && m.ready) {
+    var mr = await m.ready;
+    if (mr && typeof mr.ChunkDecoder === 'function') return mr;
+  }
+  if (_lazReady) {
+    var r = await _lazReady;
+    if (r && typeof r.ChunkDecoder === 'function') return r;
+  }
+  throw new Error('laz-perf initialised but ChunkDecoder is unavailable');
+}
+
 
 var PROP_SIZE = {
   float:4, float32:4,
@@ -350,116 +364,54 @@ function emitLasChunk(buffer, header, startIdx, count) {
     }
   }
 
+  var allPresent = new Uint8Array(count).fill(1);
   var attributes = [
-    { key: 'intensity',      values: intensity },
-    { key: 'classification', values: classification },
-    { key: 'return_num',     values: returnNum }
+    { key: 'intensity',      values: intensity,      present: allPresent },
+    { key: 'classification', values: classification, present: allPresent },
+    { key: 'return_num',     values: returnNum,      present: allPresent }
   ];
   var transfers = [xyz.buffer, intensity.buffer, classification.buffer, returnNum.buffer];
-  if (hasGps) { attributes.push({ key: 'gps_time', values: gpsTime }); transfers.push(gpsTime.buffer); }
+  if (hasGps) { attributes.push({ key: 'gps_time', values: gpsTime, present: allPresent }); transfers.push(gpsTime.buffer); }
   if (hasRgb) {
-    attributes.push({ key: 'red', values: red }, { key: 'green', values: green }, { key: 'blue', values: blue });
+    attributes.push(
+      { key: 'red',   values: red,   present: allPresent },
+      { key: 'green', values: green, present: allPresent },
+      { key: 'blue',  values: blue,  present: allPresent }
+    );
     transfers.push(red.buffer, green.buffer, blue.buffer);
   }
 
   return { xyz: xyz, attributes: attributes, transfers: transfers };
 }
 
-// Awaits _lazReady, then decodes all LAZ points, emitting CHUNK messages.
 
-async function decodeLaz(lazBuffer, header, chunkSize) {
-  var module = await _lazReady;
-
-  var pf        = header.pointFormat;
-  var scaleX    = header.scaleX, scaleY = header.scaleY, scaleZ = header.scaleZ;
-  var offsetX   = header.offsetX, offsetY = header.offsetY, offsetZ = header.offsetZ;
-  var centroidX = header.centroidX, centroidY = header.centroidY, centroidZ = header.centroidZ;
-  var hasGps    = pf === 1 || pf === 3 || pf >= 6;
-  var hasRgb    = pf === 2 || pf === 3 || pf === 7 || pf === 8;
-
-  // Copy full LAZ buffer into WASM linear memory.
-  var lazBytes = new Uint8Array(lazBuffer);
-  var inputPtr = module._malloc(lazBytes.length);
-  module.HEAPU8.set(lazBytes, inputPtr);
-
-  var lz = new module.LASZip();
-  lz.open(inputPtr, lazBytes.length);
-
-  var total    = lz.getCount();
-  var pointLen = lz.getPointLength();
-  var destPtr  = module._malloc(pointLen);
-
-  var parsed = 0;
-  while (parsed < total) {
-    var batchSize = Math.min(chunkSize, total - parsed);
-
-    var xyz            = new Float32Array(batchSize * 3);
-    var intensity      = new Float32Array(batchSize);
-    var classification = new Float32Array(batchSize);
-    var returnNum      = new Float32Array(batchSize);
-    var gpsTime = hasGps ? new Float32Array(batchSize) : null;
-    var red     = hasRgb ? new Float32Array(batchSize) : null;
-    var green   = hasRgb ? new Float32Array(batchSize) : null;
-    var blue    = hasRgb ? new Float32Array(batchSize) : null;
-
-    for (var i = 0; i < batchSize; i++) {
-      lz.getPoint(destPtr);
-
-      // Re-read HEAPU8.buffer reference each iteration: WASM memory may
-      // grow when laz-perf allocates internally, which invalidates old views.
-      var view = new DataView(module.HEAPU8.buffer, destPtr, pointLen);
-
-      var xi = view.getInt32(0, true);
-      var yi = view.getInt32(4, true);
-      var zi = view.getInt32(8, true);
-
-      xyz[i * 3]     = (xi * scaleX + offsetX) - centroidX;
-      xyz[i * 3 + 1] = (yi * scaleY + offsetY) - centroidY;
-      xyz[i * 3 + 2] = (zi * scaleZ + offsetZ) - centroidZ;
-
-      intensity[i]      = view.getUint16(12, true) / 65535.0;
-      var retByte       = view.getUint8(14);
-      returnNum[i]      = pf < 6 ? (retByte & 0x07) : (retByte & 0x0F);
-      classification[i] = view.getUint8(pf < 6 ? 15 : 16);
-
-      if (hasGps) gpsTime[i] = view.getFloat64(pf < 6 ? 20 : 22, true);
-      if (hasRgb) {
-        var rgbOff = pf === 2 ? 20 : pf === 3 ? 28 : 30;
-        red[i]   = view.getUint16(rgbOff,     true) / 65535.0;
-        green[i] = view.getUint16(rgbOff + 2, true) / 65535.0;
-        blue[i]  = view.getUint16(rgbOff + 4, true) / 65535.0;
-      }
+function parseLazChunkSize(carry, lazHdr) {
+  var view    = new DataView(carry.buffer, carry.byteOffset, carry.byteLength);
+  var numVLRs = view.getUint32(100, true);
+  var vlrOff  = lazHdr.headerSize;
+  for (var i = 0; i < numVLRs; i++) {
+    if (vlrOff + 54 > carry.length) break;
+    var recordId = view.getUint16(vlrOff + 18, true);
+    var recLen   = view.getUint16(vlrOff + 20, true);
+    if (recordId === 22204 && recLen >= 16) {
+      return view.getUint32(vlrOff + 54 + 12, true);
     }
-
-    parsed += batchSize;
-    var progress = total > 0 ? parsed / total : 1;
-
-    var attributes = [
-      { key: 'intensity',      values: intensity },
-      { key: 'classification', values: classification },
-      { key: 'return_num',     values: returnNum }
-    ];
-    var transfers = [xyz.buffer, intensity.buffer, classification.buffer, returnNum.buffer];
-    if (hasGps) { attributes.push({ key: 'gps_time', values: gpsTime }); transfers.push(gpsTime.buffer); }
-    if (hasRgb) {
-      attributes.push({ key: 'red', values: red }, { key: 'green', values: green }, { key: 'blue', values: blue });
-      transfers.push(red.buffer, green.buffer, blue.buffer);
-    }
-
-    self.postMessage(
-      { type: 'CHUNK', xyz: xyz, attributes: attributes, count: batchSize, progress: progress },
-      transfers
-    );
-    await new Promise(function(r) { setTimeout(r, 0); });
+    vlrOff += 54 + recLen;
   }
-
-  lz.delete();
-  module._free(inputPtr);
-  module._free(destPtr);
-
-  return parsed;
+  return 50000;
 }
 
+function parseLazChunkOffsets(carry, offsetToData, chunkCount) {
+  var view    = new DataView(carry.buffer, carry.byteOffset, carry.byteLength);
+  var offsets = [];
+  for (var i = 0; i < chunkCount; i++) {
+    var base = offsetToData + 8 + i * 8;
+    var lo   = view.getUint32(base,     true);
+    var hi   = view.getUint32(base + 4, true);
+    offsets.push(hi * 0x100000000 + lo);
+  }
+  return offsets;
+}
 
 self.onmessage = async function(e) {
   var d = e.data;
@@ -500,45 +452,299 @@ self.onmessage = async function(e) {
     }
 
     if (isLas) {
-      var lasBuffer = await response.arrayBuffer();
-      var lasBytes  = new Uint8Array(lasBuffer);
-      var lasHeader = parseLasHeader(lasBytes);
+      var lazReader    = response.body.getReader();
+      var carry        = new Uint8Array(0);
+      var lazHdr       = null;
+      var lazChunkSz   = 0;
+      var chunkCount   = 0;
+      var chunkOffsets = null;
 
-      if (!lasHeader) {
-        throw new Error('Not a valid LAS file — LASF signature not found in first 4 bytes.');
+      while (true) {
+        var lazRead = await lazReader.read();
+        if (lazRead.value) carry = concatBytes(carry, lazRead.value);
+
+        if (!lazHdr) {
+          if (carry.length < 100 && !lazRead.done) continue;
+          if (carry.length >= 100) {
+            var peekView = new DataView(carry.buffer, carry.byteOffset, carry.byteLength);
+            var needLen  = Math.max(375, peekView.getUint32(96, true));
+            if (carry.length < needLen && !lazRead.done) continue;
+          }
+          lazHdr = parseLasHeader(carry);
+          if (!lazHdr) throw new Error('Not a valid LAS file — LASF signature not found in first 4 bytes.');
+          lazChunkSz = parseLazChunkSize(carry, lazHdr);
+          chunkCount  = Math.ceil(lazHdr.pointCount / lazChunkSz);
+          self.postMessage({
+            type: 'HEADER',
+            vertexCount: lazHdr.pointCount,
+            attributeKeys: lazHdr.attributeKeys,
+            format: lazHdr.isLaz ? 'laz/' + lazHdr.pointFormat : 'las/' + lazHdr.pointFormat,
+            coordinateOffset: [lazHdr.centroidX, lazHdr.centroidY, lazHdr.centroidZ]
+          });
+
+          if (!lazHdr.isLaz) {
+            var lasTotal  = lazHdr.pointCount;
+            var lasBuffer = carry.buffer;
+            var lasParsedU = 0;
+            while (lasParsedU < lasTotal) {
+              var lasCount    = Math.min(chunkSize, lasTotal - lasParsedU);
+              var lasChunk    = emitLasChunk(lasBuffer, lazHdr, lasParsedU, lasCount);
+              lasParsedU     += lasCount;
+              var lasProgress = lasTotal > 0 ? lasParsedU / lasTotal : 1;
+              self.postMessage(
+                { type: 'CHUNK', xyz: lasChunk.xyz, attributes: lasChunk.attributes, count: lasCount, progress: lasProgress },
+                lasChunk.transfers
+              );
+              await new Promise(function(r) { setTimeout(r, 0); });
+            }
+            self.postMessage({ type: 'DONE', totalParsed: lasParsedU });
+            return;
+          }
+        }
+
+        if (!chunkOffsets) {
+          var needForCTCount = lazHdr.offsetToData + 8;
+          if (carry.length < needForCTCount && !lazRead.done) continue;
+          var ctView   = new DataView(carry.buffer, carry.byteOffset + lazHdr.offsetToData, 8);
+          var chunkCountFromTable = ctView.getUint32(4, true);
+          if (chunkCountFromTable > 0) {
+            chunkCount = chunkCountFromTable;
+            var needForCT = lazHdr.offsetToData + 8 + chunkCount * 8;
+            if (carry.length < needForCT && !lazRead.done) continue;
+            chunkOffsets = parseLazChunkOffsets(carry, lazHdr.offsetToData, chunkCount);
+            carry        = carry.slice(needForCT);
+          } else {
+            // chunkCount=0 means a single continuous compressed stream — not independently-seekable chunks.
+            // ChunkDecoder requires independently-seekable chunks; use LASZip for this path.
+            while (true) {
+              var lzStreamRead = await lazReader.read();
+              if (lzStreamRead.value) carry = concatBytes(carry, lzStreamRead.value);
+              if (lzStreamRead.done) break;
+            }
+            var lazModule = await _resolveLazModule();
+            var filePtr   = lazModule._malloc(carry.length);
+            lazModule.HEAPU8.set(carry, filePtr);
+            var laszip    = new lazModule.LASZip();
+            laszip.open(filePtr, carry.length);
+            var lzRecLen  = laszip.getPointLength();
+            var lzPf      = laszip.getPointFormat();
+            var lzCount   = laszip.getCount();
+            var lzTotal   = lzCount > 0 ? lzCount : lazHdr.pointCount;
+            var lzHasGps  = lzPf === 1 || lzPf === 3 || lzPf >= 6;
+            var lzHasRgb  = lzPf === 2 || lzPf === 3 || lzPf === 7 || lzPf === 8;
+            var lzDest    = lazModule._malloc(lzRecLen);
+            var lzSX = lazHdr.scaleX, lzSY = lazHdr.scaleY, lzSZ = lazHdr.scaleZ;
+            var lzOX = lazHdr.offsetX, lzOY = lazHdr.offsetY, lzOZ = lazHdr.offsetZ;
+            var lzCX = lazHdr.centroidX, lzCY = lazHdr.centroidY, lzCZ = lazHdr.centroidZ;
+
+            // Stride sampling: when the file has more points than the ring buffer
+            // can hold, decode every N-th point for spatially representative coverage.
+            // LASZip is a state machine — getPoint() must be called for every point,
+            // but we only collect the data for emitted ones.
+            var lzBudget  = d.pointBudget || 0;
+            var lzStride  = (lzBudget > 0 && lzTotal > lzBudget)
+              ? Math.ceil(lzTotal / lzBudget)
+              : 1;
+            var lzScanBatchSize = chunkSize * lzStride;  // scan this many, emit chunkSize
+
+            var lzDecoded = 0;  // total points advanced through LASZip
+            var lzParsed  = 0;  // total points emitted
+
+            while (lzDecoded < lzTotal) {
+              var lzScan    = Math.min(lzScanBatchSize, lzTotal - lzDecoded);
+              var lzEmit    = Math.ceil(lzScan / lzStride);
+              var lzXyz     = new Float32Array(lzEmit * 3);
+              var lzInt     = new Float32Array(lzEmit);
+              var lzCls     = new Float32Array(lzEmit);
+              var lzRet     = new Float32Array(lzEmit);
+              var lzGps     = lzHasGps ? new Float32Array(lzEmit) : null;
+              var lzRed     = lzHasRgb ? new Float32Array(lzEmit) : null;
+              var lzGrn     = lzHasRgb ? new Float32Array(lzEmit) : null;
+              var lzBlu     = lzHasRgb ? new Float32Array(lzEmit) : null;
+
+              var lzOut = 0;
+              for (var li = 0; li < lzScan; li++) {
+                laszip.getPoint(lzDest);
+                if (li % lzStride !== 0) continue;
+                var lv  = new DataView(lazModule.HEAPU8.buffer, lzDest, lzRecLen);
+                var lxi = lv.getInt32(0, true);
+                var lyi = lv.getInt32(4, true);
+                var lzi = lv.getInt32(8, true);
+                lzXyz[lzOut * 3]     = (lxi * lzSX + lzOX) - lzCX;
+                lzXyz[lzOut * 3 + 1] = (lyi * lzSY + lzOY) - lzCY;
+                lzXyz[lzOut * 3 + 2] = (lzi * lzSZ + lzOZ) - lzCZ;
+                lzInt[lzOut] = lv.getUint16(12, true) / 65535.0;
+                var lrb      = lv.getUint8(14);
+                lzRet[lzOut] = lzPf < 6 ? (lrb & 0x07) : (lrb & 0x0F);
+                lzCls[lzOut] = lzPf < 6 ? (lv.getUint8(15) & 0x1F) : lv.getUint8(16);
+                if (lzHasGps) lzGps[lzOut] = lv.getFloat64(lzPf < 6 ? 20 : 22, true);
+                if (lzHasRgb) {
+                  var lro      = lzPf === 2 ? 20 : lzPf === 3 ? 28 : 30;
+                  lzRed[lzOut] = lv.getUint16(lro,     true) / 65535.0;
+                  lzGrn[lzOut] = lv.getUint16(lro + 2, true) / 65535.0;
+                  lzBlu[lzOut] = lv.getUint16(lro + 4, true) / 65535.0;
+                }
+                lzOut++;
+              }
+
+              lzDecoded += lzScan;
+              lzParsed  += lzOut;
+
+              // Trim typed arrays to actual emitted count if last batch is short.
+              if (lzOut < lzEmit) {
+                lzXyz = lzXyz.subarray(0, lzOut * 3);
+                lzInt = lzInt.subarray(0, lzOut);
+                lzCls = lzCls.subarray(0, lzOut);
+                lzRet = lzRet.subarray(0, lzOut);
+                if (lzHasGps) lzGps = lzGps.subarray(0, lzOut);
+                if (lzHasRgb) { lzRed = lzRed.subarray(0, lzOut); lzGrn = lzGrn.subarray(0, lzOut); lzBlu = lzBlu.subarray(0, lzOut); }
+              }
+
+              var lzPresent = new Uint8Array(lzOut).fill(1);
+              var lzAttrs   = [
+                { key: 'intensity',      values: lzInt, present: lzPresent },
+                { key: 'classification', values: lzCls, present: lzPresent },
+                { key: 'return_num',     values: lzRet, present: lzPresent }
+              ];
+              var lzXfers = [lzXyz.buffer, lzInt.buffer, lzCls.buffer, lzRet.buffer];
+              if (lzHasGps) { lzAttrs.push({ key: 'gps_time', values: lzGps, present: lzPresent }); lzXfers.push(lzGps.buffer); }
+              if (lzHasRgb) {
+                lzAttrs.push(
+                  { key: 'red',   values: lzRed, present: lzPresent },
+                  { key: 'green', values: lzGrn, present: lzPresent },
+                  { key: 'blue',  values: lzBlu, present: lzPresent }
+                );
+                lzXfers.push(lzRed.buffer, lzGrn.buffer, lzBlu.buffer);
+              }
+              var lzProgress = lzTotal > 0 ? lzDecoded / lzTotal : 1;
+              self.postMessage(
+                { type: 'CHUNK', xyz: lzXyz, attributes: lzAttrs, count: lzOut, progress: lzProgress },
+                lzXfers
+              );
+              await new Promise(function(r) { setTimeout(r, 0); });
+            }
+
+            laszip.delete();
+            lazModule._free(filePtr);
+            lazModule._free(lzDest);
+            self.postMessage({ type: 'DONE', totalParsed: lzParsed });
+            return;
+          }
+          break;
+        }
+
+        if (lazRead.done) break;
       }
 
-      self.postMessage({
-        type: 'HEADER',
-        vertexCount: lasHeader.pointCount,
-        attributeKeys: lasHeader.attributeKeys,
-        format: lasHeader.isLaz ? 'laz/' + lasHeader.pointFormat : 'las/' + lasHeader.pointFormat,
-        coordinateOffset: [lasHeader.centroidX, lasHeader.centroidY, lasHeader.centroidZ]
-      });
+      var module    = await _resolveLazModule();
+      var lasParsed = 0;
+      var pf        = lazHdr.pointFormat;
+      var recLen    = lazHdr.pointRecLen;
+      var hasGps    = pf === 1 || pf === 3 || pf >= 6;
+      var hasRgb    = pf === 2 || pf === 3 || pf === 7 || pf === 8;
+      var scaleX = lazHdr.scaleX, scaleY = lazHdr.scaleY, scaleZ = lazHdr.scaleZ;
+      var offsetX = lazHdr.offsetX, offsetY = lazHdr.offsetY, offsetZ = lazHdr.offsetZ;
+      var centroidX = lazHdr.centroidX, centroidY = lazHdr.centroidY, centroidZ = lazHdr.centroidZ;
 
-      var totalParsed;
-      if (lasHeader.isLaz) {
-        // LAZ: decode via laz-perf (WASM already initialising in background).
-        totalParsed = await decodeLaz(lasBuffer, lasHeader, chunkSize);
-      } else {
-        // Uncompressed LAS: direct read, no WASM needed.
-        var lasTotal  = lasHeader.pointCount;
-        var lasParsed = 0;
-        while (lasParsed < lasTotal) {
-          var lasCount    = Math.min(chunkSize, lasTotal - lasParsed);
-          var lasChunk    = emitLasChunk(lasBuffer, lasHeader, lasParsed, lasCount);
-          lasParsed      += lasCount;
-          var lasProgress = lasTotal > 0 ? lasParsed / lasTotal : 1;
+      for (var chunkIdx = 0; chunkIdx < chunkCount; chunkIdx++) {
+        var isLastChunk   = chunkIdx === chunkCount - 1;
+        var pointsInChunk = isLastChunk ? (lazHdr.pointCount - lasParsed) : lazChunkSz;
+
+        var chunkByteLen;
+        if (!isLastChunk) {
+          chunkByteLen = chunkOffsets[chunkIdx + 1] - chunkOffsets[chunkIdx];
+          while (carry.length < chunkByteLen) {
+            var r = await lazReader.read();
+            if (r.value) carry = concatBytes(carry, r.value);
+            if (r.done) break;
+          }
+        } else {
+          while (true) {
+            var r = await lazReader.read();
+            if (r.value) carry = concatBytes(carry, r.value);
+            if (r.done) break;
+          }
+          chunkByteLen = carry.length;
+        }
+
+        var chunkData = carry.slice(0, chunkByteLen);
+        carry = carry.slice(chunkByteLen);
+
+        var inputPtr = module._malloc(chunkData.length);
+        module.HEAPU8.set(chunkData, inputPtr);
+        var decoder  = new module.ChunkDecoder();
+        decoder.open(pf, recLen, inputPtr);
+        var destPtr  = module._malloc(recLen);
+
+        var decoded    = 0;
+        var allPresent = new Uint8Array(Math.min(chunkSize, pointsInChunk)).fill(1);
+
+        while (decoded < pointsInChunk) {
+          var batchSize      = Math.min(chunkSize, pointsInChunk - decoded);
+          var xyz            = new Float32Array(batchSize * 3);
+          var intensity      = new Float32Array(batchSize);
+          var classification = new Float32Array(batchSize);
+          var returnNum      = new Float32Array(batchSize);
+          var gpsTime = hasGps ? new Float32Array(batchSize) : null;
+          var red     = hasRgb ? new Float32Array(batchSize) : null;
+          var green   = hasRgb ? new Float32Array(batchSize) : null;
+          var blue    = hasRgb ? new Float32Array(batchSize) : null;
+
+          for (var i = 0; i < batchSize; i++) {
+            decoder.getPoint(destPtr);
+            var view = new DataView(module.HEAPU8.buffer, destPtr, recLen);
+            var xi = view.getInt32(0, true);
+            var yi = view.getInt32(4, true);
+            var zi = view.getInt32(8, true);
+            xyz[i * 3]     = (xi * scaleX + offsetX) - centroidX;
+            xyz[i * 3 + 1] = (yi * scaleY + offsetY) - centroidY;
+            xyz[i * 3 + 2] = (zi * scaleZ + offsetZ) - centroidZ;
+            intensity[i]      = view.getUint16(12, true) / 65535.0;
+            var retByte       = view.getUint8(14);
+            returnNum[i]      = pf < 6 ? (retByte & 0x07) : (retByte & 0x0F);
+            classification[i] = pf < 6 ? (view.getUint8(15) & 0x1F) : view.getUint8(16);
+            if (hasGps) gpsTime[i] = view.getFloat64(pf < 6 ? 20 : 22, true);
+            if (hasRgb) {
+              var rgbOff = pf === 2 ? 20 : pf === 3 ? 28 : 30;
+              red[i]   = view.getUint16(rgbOff,     true) / 65535.0;
+              green[i] = view.getUint16(rgbOff + 2, true) / 65535.0;
+              blue[i]  = view.getUint16(rgbOff + 4, true) / 65535.0;
+            }
+          }
+
+          if (batchSize !== allPresent.length) allPresent = new Uint8Array(batchSize).fill(1);
+          var attributes = [
+            { key: 'intensity',      values: intensity,      present: allPresent },
+            { key: 'classification', values: classification, present: allPresent },
+            { key: 'return_num',     values: returnNum,      present: allPresent }
+          ];
+          var transfers = [xyz.buffer, intensity.buffer, classification.buffer, returnNum.buffer];
+          if (hasGps) { attributes.push({ key: 'gps_time', values: gpsTime, present: allPresent }); transfers.push(gpsTime.buffer); }
+          if (hasRgb) {
+            attributes.push(
+              { key: 'red',   values: red,   present: allPresent },
+              { key: 'green', values: green, present: allPresent },
+              { key: 'blue',  values: blue,  present: allPresent }
+            );
+            transfers.push(red.buffer, green.buffer, blue.buffer);
+          }
+
+          decoded   += batchSize;
+          lasParsed += batchSize;
+          var progress = lazHdr.pointCount > 0 ? lasParsed / lazHdr.pointCount : 1;
           self.postMessage(
-            { type: 'CHUNK', xyz: lasChunk.xyz, attributes: lasChunk.attributes, count: lasCount, progress: lasProgress },
-            lasChunk.transfers
+            { type: 'CHUNK', xyz, attributes, count: batchSize, progress },
+            transfers
           );
           await new Promise(function(r) { setTimeout(r, 0); });
         }
-        totalParsed = lasParsed;
+
+        decoder.delete();
+        module._free(inputPtr);
+        module._free(destPtr);
       }
 
-      self.postMessage({ type: 'DONE', totalParsed: totalParsed });
+      self.postMessage({ type: 'DONE', totalParsed: lasParsed });
       return;
     }
 

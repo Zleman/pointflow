@@ -32,6 +32,13 @@ export type PointCloudStatus = "idle" | "loading" | "ready" | "error";
 export interface UsePointCloudOptions {
   /** Points emitted per ingest call. Smaller = more frequent updates, lower latency. Default: 10 000. */
   chunkSize?: number;
+  /**
+   * Point budget hint for the loader worker. When the file declares more points
+   * than this, the LAZ/LAS decoder applies stride sampling so the emitted set
+   * fits within the budget rather than flooding the ring buffer with the tail of
+   * the scan. Should match the ring buffer capacity (maxPoints on the component).
+   */
+  pointBudget?: number;
   onProgress?: (progress: number) => void;
   onError?: (error: Error) => void;
   /** Called when the loader HEADER is parsed (attribute keys from file). */
@@ -170,7 +177,6 @@ export function usePointCloud(
         case "CHUNK": {
           const { xyz, attributes, count, progress: p } = msg;
           const scene = sceneRef.current;
-
           if (scene) {
             // Flush any chunks that arrived before the scene was ready.
             if (pendingRef.current.length > 0) {
@@ -236,7 +242,7 @@ export function usePointCloud(
       });
     };
 
-    worker.postMessage({ type: "PARSE", url: resolvedSource.url, chunkSize });
+    worker.postMessage({ type: "PARSE", url: resolvedSource.url, chunkSize, pointBudget: options.pointBudget });
 
     return () => {
       // Invalidate this load so any in-flight messages are silently dropped.

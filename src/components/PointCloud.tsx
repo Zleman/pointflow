@@ -193,6 +193,7 @@ export function PointCloud(props: PointCloudProps) {
 
   const { status, progress, detectedPointCount, onSceneReady, abort } = usePointCloud(src, {
     chunkSize: resolvedChunkSize,
+    pointBudget: userMaxPoints ?? 1_000_000,
     loaderFactory: resolvedLoaderFactory,
     onProgress,
     onError,
