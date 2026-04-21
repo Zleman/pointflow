@@ -25,6 +25,7 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: "pointflow/copc", replacement: path.resolve(dirname, "../src/copc/index.ts") },
+      { find: "pointflow/laz",  replacement: path.resolve(dirname, "../src/laz.ts") },
       { find: "pointflow", replacement: path.resolve(dirname, "../src/index.ts") },
     ],
     dedupe: ["three", "three/webgpu"],

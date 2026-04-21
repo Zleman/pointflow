@@ -18,6 +18,15 @@ const LazyCopcPointCloud = lazy(() =>
 const LazyPointCloud = lazy(() =>
   import("../../src/components/PointCloud").then((m) => ({ default: m.PointCloud }))
 );
+const LazyLazPointCloud = lazy(() =>
+  Promise.all([
+    import("../../src/components/PointCloud"),
+    import("pointflow/laz"),
+  ]).then(([{ PointCloud }, { createLazLoader }]) => ({
+    default: (props: React.ComponentProps<typeof PointCloud>) =>
+      <PointCloud {...props} loaderFactory={createLazLoader} maxPoints={props.maxPoints ?? 1_000_000} />,
+  }))
+);
 
 export function StreamScene() {
   const {
@@ -70,6 +79,8 @@ export function FileScene() {
   const handleFileProgress = (p: number) => fileDispatch({ type: "SET_PROGRESS", progress: p });
   const handleFileReady = () => fileDispatch({ type: "SET_STATUS", status: "ready" });
   const handleFileError = (err: Error) => fileDispatch({ type: "SET_FILE_ERROR", message: err.message });
+  const isLaz = fileSrc !== null && !isCopcDatasetUrl(fileSrc) &&
+    (fileSrc.split('?')[0].toLowerCase().endsWith('.laz') || fileSrc.includes('#.laz'));
   if (!fileSrc) return <div className="empty-state">Load a dataset URL or sample.</div>;
   if (isCopcDatasetUrl(fileSrc)) {
     return (
@@ -95,9 +106,10 @@ export function FileScene() {
       </Suspense>
     );
   }
+  const FileComponent = isLaz ? LazyLazPointCloud : LazyPointCloud;
   return (
     <Suspense fallback={<div className="empty-state">Loading file viewer…</div>}>
-      <LazyPointCloud
+      <FileComponent
         key={fileSrc}
         src={fileSrc}
         colorBy={fileColorBy || "intensity"}

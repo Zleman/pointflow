@@ -34,9 +34,23 @@ const WORKER_SCRIPT_BODY = /* javascript */ `
 var _lazMod = createLazPerf({ wasmBinary: _lazWasmB64 });
 var _lazReady = _lazMod["ready"];
 
+async function _resolveLazModule() {
+  var m = await Promise.resolve(_lazMod);
+  if (m && typeof m.ChunkDecoder === 'function') return m;
+  if (m && m.ready) {
+    var mr = await m.ready;
+    if (mr && typeof mr.ChunkDecoder === 'function') return mr;
+  }
+  if (_lazReady) {
+    var r = await _lazReady;
+    if (r && typeof r.ChunkDecoder === 'function') return r;
+  }
+  throw new Error('laz-perf initialised but ChunkDecoder is unavailable');
+}
+
 
 async function decodeTile(tileBytes, header, nodeKey, pointCount) {
-  var module = await Promise.resolve(_lazMod);
+  var module = await _resolveLazModule();
 
   var pf        = header.pointFormat;
   var recLen    = header.pointRecLen;
