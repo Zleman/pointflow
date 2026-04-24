@@ -35,6 +35,7 @@ struct Uniforms {
 @group(0) @binding(3) var<storage, read_write> visibleAttr  : array<f32>;
 @group(0) @binding(4) var<storage, read_write> indirect     : array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read>       srcTimestamp : array<f32>;
+@group(0) @binding(6) var<storage, read_write> visibleSlot  : array<u32>;
 @group(1) @binding(0) var<uniform>             uniforms     : Uniforms;
 
 fn frustumTest(pos: vec3<f32>) -> bool {
@@ -100,4 +101,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let slot = atomicAdd(&indirect[1], 1u);
   visiblePos[slot]  = pos;
   visibleAttr[slot] = attr;
+  visibleSlot[slot] = idx;
 }

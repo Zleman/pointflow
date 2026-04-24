@@ -593,15 +593,21 @@ export class PointBuffer {
     } else if (colorBy !== undefined) {
       for (let i = 0; i < this.size; i++) {
         const slot = (this.head + i) % this.capacity;
-        const item = this.items[slot] as PointRecord | undefined;
-        if (item !== undefined) {
-          this.attrVals[slot] = item.attributes?.[colorBy] ?? 0;
+        if (colorBy === "z") {
+          // Elevation mode should always be available from geometry, even when
+          // no explicit "z" attribute channel is present.
+          this.attrVals[slot] = this.zs[slot];
         } else {
-          const packedValues  = this.packedAttrValuesByKey.get(colorBy);
-          const packedPresence = this.packedAttrPresenceByKey.get(colorBy);
-          this.attrVals[slot] = packedValues !== undefined && packedPresence !== undefined && packedPresence[slot] === 1
-            ? packedValues[slot]
-            : 0;
+          const item = this.items[slot] as PointRecord | undefined;
+          if (item !== undefined) {
+            this.attrVals[slot] = item.attributes?.[colorBy] ?? 0;
+          } else {
+            const packedValues  = this.packedAttrValuesByKey.get(colorBy);
+            const packedPresence = this.packedAttrPresenceByKey.get(colorBy);
+            this.attrVals[slot] = packedValues !== undefined && packedPresence !== undefined && packedPresence[slot] === 1
+              ? packedValues[slot]
+              : 0;
+          }
         }
         const v = this.attrVals[slot];
         if (v < this.attrRangeMin) this.attrRangeMin = v;
@@ -886,9 +892,13 @@ export class PointBuffer {
       posOut[p] = this.xs[slot]; posOut[p + 1] = this.ys[slot];
       posOut[p + 2] = this.zs[slot]; posOut[p + 3] = 1.0;
       let av = 0;
-      const item = this.items[slot];
-      if (item !== undefined) av = item.attributes?.[colorBy] ?? 0;
-      else if (attrValues !== undefined && attrPresence !== undefined && attrPresence[slot] === 1) av = attrValues[slot];
+      if (colorBy === "z") {
+        av = this.zs[slot];
+      } else {
+        const item = this.items[slot];
+        if (item !== undefined) av = item.attributes?.[colorBy] ?? 0;
+        else if (attrValues !== undefined && attrPresence !== undefined && attrPresence[slot] === 1) av = attrValues[slot];
+      }
       attrOut[i] = av;
       if (av < attrMin) attrMin = av;
       if (av > attrMax) attrMax = av;
@@ -1094,6 +1104,18 @@ export class PointBuffer {
       },
       vpElements, clickX, clickY, canvasW, canvasH, pickRadius, pickStrategy,
     );
+  }
+
+  getPointAtSlot(slot: number): { x: number; y: number; z: number; attributes: Record<string, number> } | null {
+    if (slot < 0 || slot >= this.capacity || this.slotWriteSeq[slot] === 0) return null;
+    const attributes: Record<string, number> = {};
+    const item = this.items[slot];
+    if (item?.attributes) Object.assign(attributes, item.attributes);
+    for (const [key, values] of this.packedAttrValuesByKey) {
+      const presence = this.packedAttrPresenceByKey.get(key);
+      if (presence?.[slot] === 1) attributes[key] = values[slot];
+    }
+    return { x: this.xs[slot], y: this.ys[slot], z: this.zs[slot], attributes };
   }
 
 }

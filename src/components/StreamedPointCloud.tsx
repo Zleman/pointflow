@@ -245,7 +245,8 @@ export function StreamedPointCloud(props: StreamedPointCloudProps) {
     ((xyz: Float32Array, attr: Float32Array | null, count: number, isRgb?: boolean) => void) | null
   >(null);
 
-  const vpRef = useRef<Float32Array | null>(null);
+  const vpRef      = useRef<Float32Array | null>(null);
+  const gpuPickRef = useRef<((x: number, y: number) => Promise<number | null>) | null>(null);
 
   const colorByWorkerRef = useRef(colorBy);
   colorByWorkerRef.current = colorBy;
@@ -372,12 +373,30 @@ export function StreamedPointCloud(props: StreamedPointCloudProps) {
   onPointPickRef.current = props.onPointPick;
   const handlePointerDown = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!onPointPickRef.current) return;
-    const vp     = vpRef.current;
-    const buffer = bufferRef.current;
-    if (!vp || !buffer) return;
     const rect   = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
+
+    if (gpuPickRef.current) {
+      gpuPickRef.current(clickX, clickY).then((slot) => {
+        if (slot === null) return;
+        const pt = bufferRef.current?.getPointAtSlot(slot);
+        if (!pt) return;
+        onPointPickRef.current?.({
+          x: pt.x, y: pt.y, z: pt.z,
+          attributes: pt.attributes,
+          slotIndex:  slot,
+          screenDist: 0,
+          confidence: 1,
+        });
+      });
+      return;
+    }
+
+    // CPU fallback (WebGL path or GPU not yet initialised)
+    const vp     = vpRef.current;
+    const buffer = bufferRef.current;
+    if (!vp || !buffer) return;
     const result = buffer.pickNearest(vp, clickX, clickY, rect.width, rect.height, pickRadius, pickStrategy);
     if (!result) return;
     onPointPickRef.current({
@@ -389,7 +408,7 @@ export function StreamedPointCloud(props: StreamedPointCloudProps) {
       screenDist: result.screenDist,
       confidence: Math.max(0, 1 - (result.screenDist / Math.max(1e-6, pickRadius))),
     });
-  // onPointPickRef, vpRef, bufferRef are refs — .current accesses are stable without listing.
+  // onPointPickRef, vpRef, bufferRef, gpuPickRef are refs — .current accesses are stable.
   }, [pickRadius, pickStrategy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const copySoAForGPU = useCallback(
@@ -466,6 +485,7 @@ export function StreamedPointCloud(props: StreamedPointCloudProps) {
           renderMetricsRef={props.renderMetricsRef}
           effectiveHalfsize={effectiveHalfsize}
           background={background}
+          gpuPickRef={gpuPickRef}
         />
         <OrbitControls
           ref={orbitControlsRef}

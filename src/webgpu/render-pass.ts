@@ -2,6 +2,17 @@ import type { ComputePipeline } from "./compute-pipeline";
 import type { RenderPipeline } from "./point-pipeline";
 import type { WebGPUPointBuffers } from "./buffers";
 
+export interface PickRequest {
+  x: number;
+  y: number;
+  texture: GPUTexture;
+  staging: GPUBuffer;
+  pipeline: GPURenderPipeline;
+  bindGroups: [GPUBindGroup, GPUBindGroup];
+  depthView: GPUTextureView;
+  resolve: (slot: number | null) => void;
+}
+
 export interface FrameTimestampCtx {
   /** GPUQuerySet with 4 timestamp slots: computeBegin, computeEnd, renderBegin, renderEnd. */
   querySet: GPUQuerySet;
@@ -67,10 +78,12 @@ export function submitFrame(
   clearColor: GPUColorDict,
   tsCtx: FrameTimestampCtx | null,
   runCompute = true,
-  onVisibleCount?: (count: number) => void
+  onVisibleCount?: (count: number) => void,
+  pickRequest?: PickRequest
 ): void {
   const colorView = canvasContext.getCurrentTexture().createView();
   const encoder   = device.createCommandEncoder();
+  let doPickThisFrame = false;
 
   if (pointCount > 0) {
     if (runCompute) {
@@ -86,6 +99,35 @@ export function submitFrame(
       computePass.setBindGroup(1, compute.bindGroup1);
       computePass.dispatchWorkgroups(Math.ceil(pointCount / 256));
       computePass.end();
+    }
+
+    // GPU pick pass — runs after compute (sees updated indirect count) but before main render.
+    doPickThisFrame = pickRequest != null && pickRequest.staging.mapState === "unmapped";
+    if (doPickThisFrame) {
+      const pickPass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view:       pickRequest!.texture.createView(),
+          loadOp:     "clear",
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          storeOp:    "store",
+        }],
+        depthStencilAttachment: {
+          view:            pickRequest!.depthView,
+          depthLoadOp:     "clear",
+          depthClearValue: 1.0,
+          depthStoreOp:    "discard",
+        },
+      });
+      pickPass.setPipeline(pickRequest!.pipeline);
+      pickPass.setBindGroup(0, pickRequest!.bindGroups[0]);
+      pickPass.setBindGroup(1, pickRequest!.bindGroups[1]);
+      pickPass.drawIndirect(buffers.indirectBuffer, 0);
+      pickPass.end();
+      encoder.copyTextureToBuffer(
+        { texture: pickRequest!.texture, origin: { x: pickRequest!.x, y: pickRequest!.y, z: 0 } },
+        { buffer: pickRequest!.staging, bytesPerRow: 256 },
+        { width: 1, height: 1, depthOrArrayLayers: 1 },
+      );
     }
 
     const renderPass = encoder.beginRenderPass({
@@ -139,6 +181,20 @@ export function submitFrame(
 
   // ── Single submit: clear + compute + render in one command buffer ────────────
   device.queue.submit([encoder.finish()]);
+
+  // Async GPU pick readback.
+  if (pickRequest) {
+    if (doPickThisFrame) {
+      pickRequest.staging.mapAsync(GPUMapMode.READ).then(() => {
+        const view    = new Uint32Array(pickRequest.staging.getMappedRange());
+        const encoded = view[0];
+        pickRequest.staging.unmap();
+        pickRequest.resolve(encoded === 0 ? null : encoded - 1);
+      }).catch(() => pickRequest.resolve(null));
+    } else {
+      pickRequest.resolve(null);
+    }
+  }
 
   // Async visible-count readback (1 frame stale — non-blocking).
   if (pointCount > 0 && runCompute && onVisibleCount && buffers.visibleCountStagingBuffer.mapState === "unmapped") {

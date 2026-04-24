@@ -16,6 +16,10 @@ export interface WebGPUPointBuffers {
   indirectBuffer: GPUBuffer;
   /** 4-byte MAP_READ staging buffer for async readback of the visible instance count. */
   visibleCountStagingBuffer: GPUBuffer;
+  /** Compacted ring-buffer slot indices for visible points (u32 per visible point). */
+  visibleSlotBuffer: GPUBuffer;
+  /** 256-byte MAP_READ staging buffer for 1×1 R32Uint GPU pick pixel readback. */
+  pickStagingBuffer: GPUBuffer;
   /** Next write index in the GPU ring (wraps at capacity). */
   gpuWritePointer: number;
   /** Number of valid points currently in the GPU ring (≤ capacity). */
@@ -48,6 +52,8 @@ export function createPointBuffers(device: GPUDevice, requestedCapacity: number)
   // Initialize indirect[0] = 6 permanently (instanced quad: 6 vertices per instance).
   device.queue.writeBuffer(indirectBuffer, 0, new Uint32Array([6, 0, 0, 0]));
   const visibleCountStagingBuffer = mkBuf(4, GPUBufferUsage.MAP_READ | DST);
+  const visibleSlotBuffer = mkBuf(Math.max(capacity * 4, 4), STO);
+  const pickStagingBuffer = mkBuf(256, GPUBufferUsage.MAP_READ | DST);
 
   return {
     positionBuffer,
@@ -57,6 +63,8 @@ export function createPointBuffers(device: GPUDevice, requestedCapacity: number)
     visibleAttributeBuffer,
     indirectBuffer,
     visibleCountStagingBuffer,
+    visibleSlotBuffer,
+    pickStagingBuffer,
     gpuWritePointer: 0,
     gpuTotalCount: 0,
     capacity,
@@ -68,6 +76,8 @@ export function createPointBuffers(device: GPUDevice, requestedCapacity: number)
       visibleAttributeBuffer.destroy();
       indirectBuffer.destroy();
       visibleCountStagingBuffer.destroy();
+      visibleSlotBuffer.destroy();
+      pickStagingBuffer.destroy();
     },
   };
 }

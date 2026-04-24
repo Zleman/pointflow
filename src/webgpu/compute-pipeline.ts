@@ -24,6 +24,7 @@ export function createComputePipeline(
       { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // timestamps
+      { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },            // visibleSlot
     ],
   });
   const bgl1 = device.createBindGroupLayout({
@@ -67,6 +68,7 @@ export function makeComputeBindGroup0(
       { binding: 3, resource: { buffer: buffers.visibleAttributeBuffer } },
       { binding: 4, resource: { buffer: buffers.indirectBuffer } },
       { binding: 5, resource: { buffer: buffers.timestampBuffer } },
+      { binding: 6, resource: { buffer: buffers.visibleSlotBuffer } },
     ],
   });
 }

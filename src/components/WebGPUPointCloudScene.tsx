@@ -8,7 +8,8 @@ import { createPointBuffers, writeIncrementalChunk, uploadFullData, clearGpuBuff
 import { createUniformBuffer, writeUniforms } from "../webgpu/uniforms";
 import { createComputePipeline, type ComputePipeline } from "../webgpu/compute-pipeline";
 import { createRenderPipeline, type RenderPipeline } from "../webgpu/point-pipeline";
-import { submitFrame, createTimestampCtx, destroyTimestampCtx, type FrameTimestampCtx } from "../webgpu/render-pass";
+import { submitFrame, createTimestampCtx, destroyTimestampCtx, type FrameTimestampCtx, type PickRequest } from "../webgpu/render-pass";
+import { buildPickingPipeline, createPickingTexture, makePickingBindGroups } from "../webgpu/picking-pipeline";
 import { computeEffectiveRefreshIntervalMs } from "./refresh-cadence";
 import { nextAccumulationState } from "./webgpu-point/accumulation-policy";
 import {
@@ -65,6 +66,10 @@ interface WebGPUSceneState {
   depthTexture: GPUTexture | null;
   depthView: GPUTextureView | null;
   depthTextureSize: [number, number];
+  /** GPU picking resources. */
+  pickingPipeline: GPURenderPipeline;
+  pickingBindGroups: [GPUBindGroup, GPUBindGroup];
+  pickingTexture: GPUTexture | null;
   /** Timestamp query context; null when feature unavailable. */
   tsCtx: FrameTimestampCtx | null;
 }
@@ -126,6 +131,8 @@ export interface WebGPUPointCloudSceneProps {
   /** Increments each time usePointFlow.reset() is called. Triggers GPU buffer + pending-chunk clear. */
   resetVersion?: number;
   background?: string;
+  /** Set by parent; WebGPUPointCloudScene writes a GPU pick function here when ready. */
+  gpuPickRef?: React.MutableRefObject<((x: number, y: number) => Promise<number | null>) | null>;
 }
 
 export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
@@ -163,8 +170,15 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
   const fallbackRequestedRef     = useRef(false);
   const lastSeenResetVersionRef  = useRef(0);
   const prevColorByForUploadRef  = useRef<string | undefined>(undefined);
+  const pickPendingRef = useRef<{ x: number; y: number; resolve: (slot: number | null) => void } | null>(null);
 
   useEffect(() => {
+    // ── GPU pick function ────────────────────────────────────────────────
+    if (props.gpuPickRef) {
+      props.gpuPickRef.current = (x, y) =>
+        new Promise((resolve) => { pickPendingRef.current = { x, y, resolve }; });
+    }
+
     // ── Incremental ingest callback ──────────────────────────────────────
     // Written to by StreamedPointCloud when new data arrives off the worker.
     // Runs synchronously inside the caller's tick, not inside the RAF.
@@ -196,12 +210,18 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
       const gpuBuffers      = createPointBuffers(device, cap);
       const uniformBuffer   = createUniformBuffer(device);
       const canvasFormat    = navigator.gpu.getPreferredCanvasFormat();
-      const computePipeline = createComputePipeline(device, gpuBuffers, uniformBuffer);
-      const renderPipeline  = createRenderPipeline(device, gpuBuffers, uniformBuffer, canvasFormat);
-      const tsCtx           = createTimestampCtx(device);
+      const computePipeline  = createComputePipeline(device, gpuBuffers, uniformBuffer);
+      const renderPipeline   = createRenderPipeline(device, gpuBuffers, uniformBuffer, canvasFormat);
+      const pickingPipeline  = buildPickingPipeline(device);
+      const pickingBindGroups = makePickingBindGroups(
+        device, pickingPipeline,
+        gpuBuffers.visiblePositionBuffer, gpuBuffers.visibleSlotBuffer, uniformBuffer
+      );
+      const tsCtx = createTimestampCtx(device);
       return {
         device, canvasContext, gpuBuffers, uniformBuffer,
         computePipeline, renderPipeline,
+        pickingPipeline, pickingBindGroups, pickingTexture: null,
         depthTexture: null, depthView: null, depthTextureSize: [0, 0],
         tsCtx,
       };
@@ -396,7 +416,7 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
       const totalCount = gpuBuffers.gpuTotalCount;
       const colorTex   = canvasContext.getCurrentTexture();
 
-      // Recreate depth texture on resize.
+      // Recreate depth + picking textures on resize.
       if (
         !state.depthTexture ||
         state.depthTextureSize[0] !== colorTex.width ||
@@ -410,6 +430,8 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
         });
         state.depthView        = state.depthTexture.createView();
         state.depthTextureSize = [colorTex.width, colorTex.height];
+        state.pickingTexture?.destroy();
+        state.pickingTexture = createPickingTexture(device, colorTex.width, colorTex.height);
       }
 
       // Write uniforms and submit.
@@ -455,11 +477,34 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
       const clearColor = propsRef.current.background
         ? hexToGpuColor(propsRef.current.background)
         : GPU_CLEAR_COLOR;
+
+      const pickPending = pickPendingRef.current;
+      pickPendingRef.current = null;
+      const canDoPick = pickPending !== null && state.depthView !== null && state.pickingTexture !== null;
+      if (pickPending && !canDoPick) pickPending.resolve(null);
+      let pickReq: PickRequest | undefined;
+      if (canDoPick) {
+        const canvasEl = canvasContext.canvas as HTMLCanvasElement;
+        const rect = canvasEl.getBoundingClientRect();
+        const dpr = rect.width > 0 ? colorTex.width / rect.width : 1;
+        pickReq = {
+          x:          Math.min(Math.floor(pickPending!.x * dpr), colorTex.width - 1),
+          y:          Math.min(Math.floor(pickPending!.y * dpr), colorTex.height - 1),
+          texture:    state.pickingTexture!,
+          staging:    gpuBuffers.pickStagingBuffer,
+          pipeline:   state.pickingPipeline,
+          bindGroups: state.pickingBindGroups,
+          depthView:  state.depthView!,
+          resolve:    pickPending!.resolve,
+        };
+      }
+
       submitFrame(
         device, canvasContext, gpuBuffers, computePipeline, renderPipeline,
         totalCount, state.depthView, clearColor, state.tsCtx,
         shouldRunCompute,
-        (visibleCount) => { lastVisibleCountRef.current = visibleCount; }
+        (visibleCount) => { lastVisibleCountRef.current = visibleCount; },
+        pickReq,
       );
 
       if (shouldRunCompute) {
@@ -509,8 +554,10 @@ export function WebGPUPointCloudScene(props: WebGPUPointCloudSceneProps) {
       cancelledRef.current = true;
       cancelAnimationFrame(rafId);
       props.rawIngestCallbackRef.current = null;
+      if (props.gpuPickRef) props.gpuPickRef.current = null;
       if (gpuStateRef.current) {
         gpuStateRef.current.depthTexture?.destroy();
+        gpuStateRef.current.pickingTexture?.destroy();
         if (gpuStateRef.current.tsCtx) destroyTimestampCtx(gpuStateRef.current.tsCtx);
         gpuStateRef.current.gpuBuffers.destroy();
         gpuStateRef.current = null;

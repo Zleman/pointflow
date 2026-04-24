@@ -27,6 +27,15 @@ const LazyLazPointCloud = lazy(() =>
       <PointCloud {...props} loaderFactory={createLazLoader} maxPoints={props.maxPoints ?? 1_000_000} />,
   }))
 );
+const LazyE57PointCloud = lazy(() =>
+  Promise.all([
+    import("../../src/components/PointCloud"),
+    import("../../src/e57"),
+  ]).then(([{ PointCloud }, { createE57Loader }]) => ({
+    default: (props: React.ComponentProps<typeof PointCloud>) =>
+      <PointCloud {...props} loaderFactory={createE57Loader} maxPoints={props.maxPoints ?? 1_000_000} />,
+  }))
+);
 
 export function StreamScene() {
   const {
@@ -65,6 +74,7 @@ export function StreamScene() {
       onStats={setStats}
       renderMetricsRef={renderMetricsRef}
       onReady={onStreamReady}
+      onPointPick={(pt) => console.log("[pick]", `x=${pt.x.toFixed(3)} y=${pt.y.toFixed(3)} z=${pt.z.toFixed(3)}`, `slot=${pt.slotIndex}`, `confidence=${pt.confidence}`, pt.attributes)}
       progress={1}
       cameraFit={{ halfsize: 15 }}
       background={canvasBg}
@@ -81,6 +91,8 @@ export function FileScene() {
   const handleFileError = (err: Error) => fileDispatch({ type: "SET_FILE_ERROR", message: err.message });
   const isLaz = fileSrc !== null && !isCopcDatasetUrl(fileSrc) &&
     (fileSrc.split('?')[0].toLowerCase().endsWith('.laz') || fileSrc.includes('#.laz'));
+  const isE57 = fileSrc !== null && !isCopcDatasetUrl(fileSrc) &&
+    (fileSrc.split('?')[0].toLowerCase().endsWith('.e57') || fileSrc.includes('#.e57'));
   if (!fileSrc) return <div className="empty-state">Load a dataset URL or sample.</div>;
   if (isCopcDatasetUrl(fileSrc)) {
     return (
@@ -106,7 +118,7 @@ export function FileScene() {
       </Suspense>
     );
   }
-  const FileComponent = isLaz ? LazyLazPointCloud : LazyPointCloud;
+  const FileComponent = isE57 ? LazyE57PointCloud : (isLaz ? LazyLazPointCloud : LazyPointCloud);
   return (
     <Suspense fallback={<div className="empty-state">Loading file viewer…</div>}>
       <FileComponent
@@ -121,6 +133,7 @@ export function FileScene() {
         renderMetricsRef={renderMetricsRef}
         onRendererResolved={setActiveBackend}
         onAvailableAttributes={(attrs) => fileDispatch({ type: "SET_AVAILABLE_ATTRS", attributes: attrs })}
+        onPointPick={(pt) => console.log("[pick]", `x=${pt.x.toFixed(3)} y=${pt.y.toFixed(3)} z=${pt.z.toFixed(3)}`, `slot=${pt.slotIndex}`, `confidence=${pt.confidence}`, pt.attributes)}
       />
     </Suspense>
   );

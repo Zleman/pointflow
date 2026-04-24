@@ -57,6 +57,7 @@ export function StreamBackendSceneRouter(props: {
   renderMetricsRef?: React.MutableRefObject<StreamedPointCloudRenderMetrics | null>;
   effectiveHalfsize: number;
   background?: string;
+  gpuPickRef?: React.MutableRefObject<((x: number, y: number) => Promise<number | null>) | null>;
 }) {
   const {
     resolvedRendererBackend,
@@ -90,6 +91,7 @@ export function StreamBackendSceneRouter(props: {
     renderMetricsRef,
     effectiveHalfsize,
     background,
+    gpuPickRef,
   } = props;
 
   if (resolvedRendererBackend === "webgpu") {
@@ -125,6 +127,7 @@ export function StreamBackendSceneRouter(props: {
         cameraFit={effectiveHalfsize > 0 ? { halfsize: effectiveHalfsize } : undefined}
         resetVersion={state.resetVersion}
         background={background}
+        gpuPickRef={gpuPickRef}
       />
     );
   }
