@@ -17,6 +17,8 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: npm run typecheck
+      - name: Build
+        run: npm run build
       - name: Test
         run: npm test
       - run: npx vite build --config demo/vite.config.ts
