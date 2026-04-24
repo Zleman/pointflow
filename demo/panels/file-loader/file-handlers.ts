@@ -7,7 +7,7 @@ export function buildFileSourceFromDisk(file: File): { src: string; label: strin
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   const blob = URL.createObjectURL(file);
   const hint = isCopc ? "#.copc.laz"
-    : (ext === "las" || ext === "laz") ? `#.${ext}`
+    : (ext === "las" || ext === "laz" || ext === "pcd" || ext === "e57") ? `#.${ext}`
     : "";
   return {
     src: blob + hint,

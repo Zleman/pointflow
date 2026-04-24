@@ -320,6 +320,7 @@ export function usePointFlow(options: UsePointFlowOptions): UsePointFlowState {
   const lastResetRequestIdRef = useRef(0);
   const resolvedTierRef = useRef<TierLevel>(tier ?? detectTierFromEnvironment());
   const autoImportanceResolvedRef = useRef(false);
+  const onRawIngestRef = useRef(options.onRawIngest);
 
   const resolvedTier = tier ?? resolvedTierRef.current;
 
@@ -415,6 +416,8 @@ export function usePointFlow(options: UsePointFlowOptions): UsePointFlowState {
     autoImportanceResolvedRef.current = true;
   };
 
+  onRawIngestRef.current = options.onRawIngest;
+
   useEffect(() => {
     if (!workerMode) {
       return;
@@ -426,7 +429,7 @@ export function usePointFlow(options: UsePointFlowOptions): UsePointFlowState {
           if (requestId < lastResetRequestIdRef.current) return;
           bufferRef.current!.ingestFromBinary(xyz, attributes as PackedAttributeChannel[] | undefined, count, rangeHints);
           resolveAutoImportance(attributes as PackedAttributeChannel[] | undefined);
-          options.onRawIngest?.(xyz, attributes as PackedAttributeChannel[] | undefined, count);
+          onRawIngestRef.current?.(xyz, attributes as PackedAttributeChannel[] | undefined, count);
           if (reactivePush) {
             setPointsVersion((v: number) => v + 1);
             setStatsVersion((v: number) => v + 1);

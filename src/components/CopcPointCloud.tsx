@@ -301,11 +301,6 @@ export function CopcPointCloud(props: CopcPointCloudProps) {
   }, [index, fileSourceLabel, src, resolvedMaxCacheMb, resolvedMaxConcurrent, resolvedPersistCache, resolvedMaxDepth]);
 
   useEffect(() => {
-    if (!index) return;
-    onAvailableAttributesRef.current?.([...index.lasHeader.attributeKeys]);
-  }, [index]);
-
-  useEffect(() => {
     return () => {
       if (fileViewSnapshotRef) fileViewSnapshotRef.current = null;
     };
@@ -348,6 +343,7 @@ export function CopcPointCloud(props: CopcPointCloudProps) {
         };
         setIndex(source.index);
         pushProgress(PHASE_INDEX);
+        onAvailableAttributesRef.current?.([...source.index.lasHeader.attributeKeys]);
         onReadyRef.current?.();
         onTelemetryEvent?.({ phase: "index_loaded", progress: PHASE_INDEX });
       })

@@ -1,13 +1,13 @@
 /**
  * Self-contained loader worker for static point cloud files.
- * Supports PLY (binary LE/BE, ASCII), XYZ/CSV, and LAS 1.0–1.4 (uncompressed).
+ * Supports PLY (binary LE/BE, ASCII), XYZ/CSV, LAS 1.0–1.4 (uncompressed), and PCD (ASCII, binary, binary_compressed).
  *
  * File size exception (~595 lines): this file is serialised as a Blob URL string at runtime.
  * Worker code cannot import ES modules, so all format parsers (PLY, XYZ, LAS) must be inlined
  * here rather than imported from separate files. See architecture note below for details.
  *
  * Message protocol:
- *   IN:  { type: "PARSE", url: string, chunkSize?: number, format?: 'ply'|'xyz'|'las'|'laz' }
+ *   IN:  { type: "PARSE", url: string, chunkSize?: number, format?: 'ply'|'xyz'|'las'|'laz'|'pcd' }
  *   OUT: { type: "HEADER", vertexCount: number, attributeKeys: string[], format: string,
  *                          coordinateOffset?: [number, number, number] }
  *        { type: "CHUNK",  xyz: Float32Array, attributes: DenseAttr[], count: number, progress: number }
@@ -363,6 +363,96 @@ function emitLasChunk(buffer, header, startIdx, count) {
 }
 
 
+function readPcdField(view, offset, type, size) {
+  if (type === 'F') return size === 8 ? view.getFloat64(offset, true) : view.getFloat32(offset, true);
+  if (type === 'I') {
+    if (size === 1) return view.getInt8(offset);
+    if (size === 2) return view.getInt16(offset, true);
+    return view.getInt32(offset, true);
+  }
+  if (size === 1) return view.getUint8(offset);
+  if (size === 2) return view.getUint16(offset, true);
+  return view.getUint32(offset, true);
+}
+
+function parsePcdHeader(carry) {
+  var text = new TextDecoder().decode(carry);
+  var dataMatch = /^DATA\\s+(\\S+)/m.exec(text);
+  if (!dataMatch) return null;
+  var nlIdx = text.indexOf('\\n', dataMatch.index);
+  if (nlIdx === -1) return null;
+  var headerText = text.slice(0, nlIdx + 1);
+  var headerByteLen = new TextEncoder().encode(headerText).length;
+  var fields = [], sizes = [], types = [], counts = [], points = 0, dataType = 'binary';
+  var lines = headerText.split(/\\r?\\n/);
+  for (var hi = 0; hi < lines.length; hi++) {
+    var hparts = lines[hi].trim().split(/\\s+/);
+    if (!hparts[0] || hparts[0][0] === '#') continue;
+    if (hparts[0] === 'FIELDS') fields = hparts.slice(1);
+    else if (hparts[0] === 'SIZE') { sizes = []; for (var hsi = 1; hsi < hparts.length; hsi++) sizes.push(Number(hparts[hsi])); }
+    else if (hparts[0] === 'TYPE') types = hparts.slice(1);
+    else if (hparts[0] === 'COUNT') { counts = []; for (var hci = 1; hci < hparts.length; hci++) counts.push(Number(hparts[hci])); }
+    else if (hparts[0] === 'POINTS') points = parseInt(hparts[1], 10);
+    else if (hparts[0] === 'DATA') dataType = hparts[1].toLowerCase();
+  }
+  // PCD COUNT defaults to 1 per field when omitted.
+  if (counts.length === 0) {
+    for (var ci = 0; ci < fields.length; ci++) counts.push(1);
+  }
+  while (counts.length < fields.length) counts.push(1);
+  while (sizes.length < fields.length) sizes.push(4);
+  while (types.length < fields.length) types.push('F');
+
+  var fieldWidths = [];
+  for (var fwi = 0; fwi < fields.length; fwi++) {
+    fieldWidths.push((sizes[fwi] || 4) * (counts[fwi] || 1));
+  }
+
+  return {
+    fields: fields,
+    sizes: sizes,
+    types: types,
+    counts: counts,
+    fieldWidths: fieldWidths,
+    points: points,
+    dataType: dataType,
+    headerByteLen: headerByteLen
+  };
+}
+
+// PCD binary_compressed uses LZF (not LZ4).
+function lzfBlockDecompress(src, uncompressedSize) {
+  var dst = new Uint8Array(uncompressedSize);
+  var ip = 0, op = 0;
+
+  while (ip < src.length) {
+    var ctrl = src[ip++];
+    if (ctrl < 32) {
+      var litLen = ctrl + 1;
+      if (ip + litLen > src.length || op + litLen > dst.length) throw new Error('PCD binary_compressed: invalid LZF literal run');
+      dst.set(src.subarray(ip, ip + litLen), op);
+      ip += litLen;
+      op += litLen;
+    } else {
+      var len = ctrl >> 5;
+      var ref = op - ((ctrl & 0x1f) << 8) - 1;
+      if (len === 7) {
+        if (ip >= src.length) throw new Error('PCD binary_compressed: invalid LZF match length');
+        len += src[ip++];
+      }
+      if (ip >= src.length) throw new Error('PCD binary_compressed: truncated LZF stream');
+      ref -= src[ip++];
+      len += 2;
+
+      if (ref < 0 || op + len > dst.length) throw new Error('PCD binary_compressed: invalid LZF back-reference');
+      for (var mi = 0; mi < len; mi++) dst[op++] = dst[ref++];
+    }
+  }
+  if (op !== uncompressedSize) throw new Error('PCD binary_compressed: decompressed size mismatch');
+  return dst;
+}
+
+
 self.onmessage = async function(e) {
   var d = e.data;
   if (d.type !== 'PARSE') return;
@@ -388,13 +478,15 @@ self.onmessage = async function(e) {
                 (!forcedFormat && (path.endsWith('.las') || path.endsWith('.laz') ||
                   urlHash === '.las' || urlHash === '.laz'));
 
+    var isPcd = forcedFormat === 'pcd' || (!forcedFormat && (path.endsWith('.pcd') || urlHash === '.pcd'));
+
     var isXyz = forcedFormat === 'xyz' ||
-                (!forcedFormat && !isLas && (path.endsWith('.xyz') || path.endsWith('.csv') || path.endsWith('.txt')));
+                (!forcedFormat && !isLas && !isPcd && (path.endsWith('.xyz') || path.endsWith('.csv') || path.endsWith('.txt')));
 
     // If extension is unrecognised and no format override, sniff the first
     // bytes of the response body to distinguish LAS ('LASF'), PLY ('ply'), and XYZ.
     // response.clone() lets us peek without consuming the stream the parsers need.
-    if (!isXyz && !path.endsWith('.ply') && forcedFormat !== 'ply' && !isLas) {
+    if (!isXyz && !isPcd && !path.endsWith('.ply') && forcedFormat !== 'ply' && !isLas) {
       var peekReader = response.clone().body.getReader();
       var peekChunk  = await peekReader.read();
       await peekReader.cancel();
@@ -500,6 +592,211 @@ self.onmessage = async function(e) {
       }
 
       self.postMessage({ type: 'DONE', totalParsed: lasParsed });
+      return;
+    }
+
+    if (isPcd) {
+      var pcdReader = response.body.getReader();
+      var pcdCarry = new Uint8Array(0);
+      var pcdSchema = null;
+
+      while (!pcdSchema) {
+        var pcdRead = await pcdReader.read();
+        if (pcdRead.value) pcdCarry = concatBytes(pcdCarry, pcdRead.value);
+        pcdSchema = parsePcdHeader(pcdCarry);
+        if (pcdRead.done && !pcdSchema) throw new Error('PCD header incomplete');
+      }
+      pcdCarry = pcdCarry.slice(pcdSchema.headerByteLen);
+
+      var pcdXIdx = pcdSchema.fields.indexOf('x');
+      var pcdYIdx = pcdSchema.fields.indexOf('y');
+      var pcdZIdx = pcdSchema.fields.indexOf('z');
+      if (pcdXIdx < 0 || pcdYIdx < 0 || pcdZIdx < 0) throw new Error('PCD file missing x, y, or z field');
+
+      var pcdAttrDescs = [];
+      var pcdAttrKeys = [];
+      var pcdRgbBuf = new ArrayBuffer(4);
+      var pcdRgbF32 = new Float32Array(pcdRgbBuf);
+      var pcdRgbU32 = new Uint32Array(pcdRgbBuf);
+      for (var pfi = 0; pfi < pcdSchema.fields.length; pfi++) {
+        var pfn = pcdSchema.fields[pfi];
+        if (pfn === 'x' || pfn === 'y' || pfn === 'z') continue;
+        if (pfn === 'rgb' || pfn === 'rgba') {
+          // Float bits pack ARGB uint32 — expand to separate red/green/blue channels
+          pcdAttrDescs.push({ fieldIdx: pfi, emitKey: 'red',   rgb: 'r', norm: 1, type: pcdSchema.types[pfi], size: pcdSchema.sizes[pfi] });
+          pcdAttrDescs.push({ fieldIdx: pfi, emitKey: 'green', rgb: 'g', norm: 1, type: pcdSchema.types[pfi], size: pcdSchema.sizes[pfi] });
+          pcdAttrDescs.push({ fieldIdx: pfi, emitKey: 'blue',  rgb: 'b', norm: 1, type: pcdSchema.types[pfi], size: pcdSchema.sizes[pfi] });
+          pcdAttrKeys.push('red', 'green', 'blue');
+        } else {
+          var pEmitKey = pfn === 'ring' ? 'return_num' : pfn;
+          var pNorm = (pfn === 'intensity' && pcdSchema.types[pfi] === 'U') ? (Math.pow(2, pcdSchema.sizes[pfi] * 8) - 1) : 1;
+          pcdAttrDescs.push({ fieldIdx: pfi, emitKey: pEmitKey, rgb: null, norm: pNorm, type: pcdSchema.types[pfi], size: pcdSchema.sizes[pfi] });
+          pcdAttrKeys.push(pEmitKey);
+        }
+      }
+
+      self.postMessage({ type: 'HEADER', vertexCount: pcdSchema.points, attributeKeys: pcdAttrKeys, format: 'pcd/' + pcdSchema.dataType });
+
+      var pcdEmitted = 0;
+      var pcdTotal = pcdSchema.points;
+
+      var emitPcdChunk = function(xyz, attrArrays, count) {
+        var pcdAttrs = [];
+        var pcdTransfers = [xyz.buffer];
+        for (var ai = 0; ai < pcdAttrDescs.length; ai++) {
+          pcdAttrs.push({ key: pcdAttrDescs[ai].emitKey, values: attrArrays[ai] });
+          pcdTransfers.push(attrArrays[ai].buffer);
+        }
+        var prog = pcdTotal > 0 ? Math.min((pcdEmitted + count) / pcdTotal, 1) : 1;
+        self.postMessage({ type: 'CHUNK', xyz: xyz, attributes: pcdAttrs, count: count, progress: prog }, pcdTransfers);
+        pcdEmitted += count;
+      };
+
+      if (pcdSchema.dataType === 'ascii') {
+        while (true) {
+          var pcdAR = await pcdReader.read();
+          if (pcdAR.value) pcdCarry = concatBytes(pcdCarry, pcdAR.value);
+          if (pcdAR.done) break;
+        }
+        var pcdText = new TextDecoder().decode(pcdCarry);
+        var pcdRawLines = pcdText.split(/\\r?\\n/);
+        var pcdDataLines = [];
+        for (var pli = 0; pli < pcdRawLines.length; pli++) {
+          var pcdLine = pcdRawLines[pli].trim();
+          if (pcdLine.length > 0) pcdDataLines.push(pcdLine);
+        }
+        var pcdLineTotal = Math.min(pcdDataLines.length, pcdTotal);
+        for (var pStart = 0; pStart < pcdLineTotal; pStart += chunkSize) {
+          var pCount = Math.min(chunkSize, pcdLineTotal - pStart);
+          var pXyz = new Float32Array(pCount * 3);
+          var pAttrArrs = [];
+          for (var ai = 0; ai < pcdAttrDescs.length; ai++) pAttrArrs.push(new Float32Array(pCount));
+          for (var pi = 0; pi < pCount; pi++) {
+            var pParts = pcdDataLines[pStart + pi].split(/\\s+/);
+            pXyz[pi * 3]     = parseFloat(pParts[pcdXIdx]) || 0;
+            pXyz[pi * 3 + 1] = parseFloat(pParts[pcdYIdx]) || 0;
+            pXyz[pi * 3 + 2] = parseFloat(pParts[pcdZIdx]) || 0;
+            for (var ai2 = 0; ai2 < pcdAttrDescs.length; ai2++) {
+              var pd = pcdAttrDescs[ai2];
+              var pRaw = parseFloat(pParts[pd.fieldIdx]) || 0;
+              if (pd.rgb !== null) {
+                pcdRgbF32[0] = pRaw;
+                var pPacked = pcdRgbU32[0];
+                pAttrArrs[ai2][pi] = pd.rgb === 'r' ? ((pPacked >> 16) & 0xff) / 255 :
+                                     pd.rgb === 'g' ? ((pPacked >> 8)  & 0xff) / 255 :
+                                                      ( pPacked        & 0xff) / 255;
+              } else {
+                pAttrArrs[ai2][pi] = pd.norm !== 1 ? pRaw / pd.norm : pRaw;
+              }
+            }
+          }
+          emitPcdChunk(pXyz, pAttrArrs, pCount);
+          await new Promise(function(r) { setTimeout(r, 0); });
+        }
+
+      } else if (pcdSchema.dataType === 'binary') {
+        var pcdStride = 0;
+        for (var pfi2 = 0; pfi2 < pcdSchema.fieldWidths.length; pfi2++) pcdStride += pcdSchema.fieldWidths[pfi2];
+        var pcdFldOff = [];
+        var pcdRunOff = 0;
+        for (var pfi3 = 0; pfi3 < pcdSchema.fields.length; pfi3++) {
+          pcdFldOff.push(pcdRunOff);
+          pcdRunOff += pcdSchema.fieldWidths[pfi3];
+        }
+        while (pcdEmitted < pcdTotal) {
+          var pcdBR = await pcdReader.read();
+          if (pcdBR.value) pcdCarry = concatBytes(pcdCarry, pcdBR.value);
+          var pcdComplete = Math.min(Math.floor(pcdCarry.length / pcdStride), pcdTotal - pcdEmitted);
+          if (pcdComplete > 0) {
+            var pcdUsed = pcdComplete * pcdStride;
+            var pcdSlice = pcdCarry.slice(0, pcdUsed);
+            pcdCarry = pcdCarry.slice(pcdUsed);
+            var pcdView = new DataView(pcdSlice.buffer, pcdSlice.byteOffset, pcdSlice.byteLength);
+            var pBinStart = 0;
+            while (pBinStart < pcdComplete) {
+              var pBinCount = Math.min(chunkSize, pcdComplete - pBinStart);
+              var pBinXyz = new Float32Array(pBinCount * 3);
+              var pBinAttrArrs = [];
+              for (var ai = 0; ai < pcdAttrDescs.length; ai++) pBinAttrArrs.push(new Float32Array(pBinCount));
+              for (var pi2 = 0; pi2 < pBinCount; pi2++) {
+                var pBase = (pBinStart + pi2) * pcdStride;
+                pBinXyz[pi2 * 3]     = readPcdField(pcdView, pBase + pcdFldOff[pcdXIdx], pcdSchema.types[pcdXIdx], pcdSchema.sizes[pcdXIdx]);
+                pBinXyz[pi2 * 3 + 1] = readPcdField(pcdView, pBase + pcdFldOff[pcdYIdx], pcdSchema.types[pcdYIdx], pcdSchema.sizes[pcdYIdx]);
+                pBinXyz[pi2 * 3 + 2] = readPcdField(pcdView, pBase + pcdFldOff[pcdZIdx], pcdSchema.types[pcdZIdx], pcdSchema.sizes[pcdZIdx]);
+                for (var ai3 = 0; ai3 < pcdAttrDescs.length; ai3++) {
+                  var pd2 = pcdAttrDescs[ai3];
+                  var pRaw2 = readPcdField(pcdView, pBase + pcdFldOff[pd2.fieldIdx], pd2.type, pd2.size);
+                  if (pd2.rgb !== null) {
+                    pcdRgbF32[0] = pRaw2;
+                    var pPacked2 = pcdRgbU32[0];
+                    pBinAttrArrs[ai3][pi2] = pd2.rgb === 'r' ? ((pPacked2 >> 16) & 0xff) / 255 :
+                                             pd2.rgb === 'g' ? ((pPacked2 >> 8)  & 0xff) / 255 :
+                                                               ( pPacked2        & 0xff) / 255;
+                  } else {
+                    pBinAttrArrs[ai3][pi2] = pd2.norm !== 1 ? pRaw2 / pd2.norm : pRaw2;
+                  }
+                }
+              }
+              emitPcdChunk(pBinXyz, pBinAttrArrs, pBinCount);
+              pBinStart += pBinCount;
+              await new Promise(function(r) { setTimeout(r, 0); });
+            }
+          }
+          if (pcdBR.done) break;
+        }
+
+      } else {
+        // binary_compressed: LZF-compressed block, column-major data layout after decompression.
+        while (true) {
+          var pcdCR = await pcdReader.read();
+          if (pcdCR.value) pcdCarry = concatBytes(pcdCarry, pcdCR.value);
+          if (pcdCR.done) break;
+        }
+        if (pcdCarry.length < 8) throw new Error('PCD binary_compressed: stream too short');
+        var pcdCView = new DataView(pcdCarry.buffer, pcdCarry.byteOffset, pcdCarry.byteLength);
+        var pcdCmpSz = pcdCView.getUint32(0, true);
+        var pcdUncSz = pcdCView.getUint32(4, true);
+        if (8 + pcdCmpSz > pcdCarry.length) throw new Error('PCD binary_compressed: compressed block truncated');
+        var pcdCmpBlk = pcdCarry.slice(8, 8 + pcdCmpSz);
+        var pcdDec = lzfBlockDecompress(pcdCmpBlk, pcdUncSz);
+        var pcdColOff = [];
+        var pcdColCursor = 0;
+        for (var pci = 0; pci < pcdSchema.fields.length; pci++) {
+          pcdColOff.push(pcdColCursor);
+          pcdColCursor += pcdSchema.fieldWidths[pci] * pcdTotal;
+        }
+        if (pcdColCursor > pcdDec.length) throw new Error('PCD binary_compressed: decompressed payload too small');
+        var pcdDecView = new DataView(pcdDec.buffer, pcdDec.byteOffset, pcdDec.byteLength);
+        for (var pCmpStart = 0; pCmpStart < pcdTotal; pCmpStart += chunkSize) {
+          var pCmpCount = Math.min(chunkSize, pcdTotal - pCmpStart);
+          var pCmpXyz = new Float32Array(pCmpCount * 3);
+          var pCmpAttrArrs = [];
+          for (var ai = 0; ai < pcdAttrDescs.length; ai++) pCmpAttrArrs.push(new Float32Array(pCmpCount));
+          for (var pi3 = 0; pi3 < pCmpCount; pi3++) {
+            var absIdx = pCmpStart + pi3;
+            pCmpXyz[pi3 * 3]     = readPcdField(pcdDecView, pcdColOff[pcdXIdx] + absIdx * pcdSchema.fieldWidths[pcdXIdx], pcdSchema.types[pcdXIdx], pcdSchema.sizes[pcdXIdx]);
+            pCmpXyz[pi3 * 3 + 1] = readPcdField(pcdDecView, pcdColOff[pcdYIdx] + absIdx * pcdSchema.fieldWidths[pcdYIdx], pcdSchema.types[pcdYIdx], pcdSchema.sizes[pcdYIdx]);
+            pCmpXyz[pi3 * 3 + 2] = readPcdField(pcdDecView, pcdColOff[pcdZIdx] + absIdx * pcdSchema.fieldWidths[pcdZIdx], pcdSchema.types[pcdZIdx], pcdSchema.sizes[pcdZIdx]);
+            for (var ai4 = 0; ai4 < pcdAttrDescs.length; ai4++) {
+              var pd3 = pcdAttrDescs[ai4];
+              var pRaw3 = readPcdField(pcdDecView, pcdColOff[pd3.fieldIdx] + absIdx * pcdSchema.fieldWidths[pd3.fieldIdx], pd3.type, pd3.size);
+              if (pd3.rgb !== null) {
+                pcdRgbF32[0] = pRaw3;
+                var pPacked3 = pcdRgbU32[0];
+                pCmpAttrArrs[ai4][pi3] = pd3.rgb === 'r' ? ((pPacked3 >> 16) & 0xff) / 255 :
+                                         pd3.rgb === 'g' ? ((pPacked3 >> 8)  & 0xff) / 255 :
+                                                           ( pPacked3        & 0xff) / 255;
+              } else {
+                pCmpAttrArrs[ai4][pi3] = pd3.norm !== 1 ? pRaw3 / pd3.norm : pRaw3;
+              }
+            }
+          }
+          emitPcdChunk(pCmpXyz, pCmpAttrArrs, pCmpCount);
+          await new Promise(function(r) { setTimeout(r, 0); });
+        }
+      }
+
+      self.postMessage({ type: 'DONE', totalParsed: pcdEmitted });
       return;
     }
 

@@ -12,6 +12,7 @@ export function FileLoaderView(props: {
   colorBy: string;
   pointCount: number | null;
   colorByKeys: string[];
+  colorByDisabled: boolean;
   selectValue: string;
   statusColor: React.CSSProperties["color"];
   generating: boolean;
@@ -44,6 +45,7 @@ export function FileLoaderView(props: {
     colorBy,
     pointCount,
     colorByKeys,
+    colorByDisabled,
     selectValue,
     statusColor,
     generating,
@@ -84,15 +86,16 @@ export function FileLoaderView(props: {
       <div className="pf-panel-title">File Loader - M9</div>
       <p style={{ margin: "0 0 10px", fontSize: 12, color: "#94a3b8" }}>
         Load <strong style={{ color: "#e2e8f0" }}>LAS / LAZ</strong>,{" "}
-        <strong style={{ color: "#e2e8f0" }}>COPC (.copc.laz)</strong>, PLY, or
-        XYZ / CSV. Drag a file anywhere onto this panel, use{" "}
+        <strong style={{ color: "#e2e8f0" }}>COPC (.copc.laz)</strong>, PLY,
+        PCD, E57, or XYZ / CSV. Drag a file anywhere onto this panel, use{" "}
         <strong style={{ color: "#e2e8f0" }}>Open file</strong>, or paste a URL.
-        LAS/PLY/XYZ parse in a worker; COPC streams tiles from the octree index.
+        LAS/PLY/PCD parse in a worker; E57 uses the dedicated E57 loader; COPC
+        streams tiles from the octree index.
       </p>
       <input
         ref={fileInputRef}
         type="file"
-        accept=".las,.laz,.copc.laz,.ply,.xyz,.csv,.txt"
+        accept=".las,.laz,.copc.laz,.ply,.pcd,.e57,.xyz,.csv,.txt"
         style={{ display: "none" }}
         onChange={onFileSelect}
       />
@@ -112,7 +115,7 @@ export function FileLoaderView(props: {
         <button className="pf-btn pf-btn-primary" type="button" onClick={onLoadUrl} disabled={isLoading || !urlInput.trim()}>
           Load URL
         </button>
-        <button className="pf-btn" type="button" onClick={onOpenFile} disabled={isLoading} title="Open LAS, LAZ, COPC (.copc.laz), PLY, or XYZ from disk">
+        <button className="pf-btn" type="button" onClick={onOpenFile} disabled={isLoading} title="Open LAS, LAZ, COPC (.copc.laz), PLY, PCD, E57, or XYZ from disk">
           Open file
         </button>
         <button className="pf-btn" type="button" onClick={onLoadSpiral} disabled={isLoading || generating} title="Generate a 500k-point synthetic spiral galaxy (intensity)">
@@ -190,17 +193,21 @@ export function FileLoaderView(props: {
         <span className="pf-panel-title" style={{ marginBottom: 0 }}>Colour by</span>
         <select
           className="pf-benchmark-select"
-          value={selectValue}
-          title={colorByOptionTitle(selectValue)}
+          value={colorByDisabled ? "" : selectValue}
+          disabled={colorByDisabled}
+          title={colorByDisabled ? "Loading…" : colorByOptionTitle(selectValue)}
           aria-label="Colour by attribute"
           onChange={(e) => onColorByChange(e.target.value)}
           style={{ width: "100%", maxWidth: 320, marginTop: 4 }}
         >
-          {colorByKeys.map((k) => (
-            <option key={k} value={k} title={colorByOptionTitle(k)}>
-              {colorByOptionTitle(k)}
-            </option>
-          ))}
+          {colorByDisabled
+            ? <option value="">Loading…</option>
+            : colorByKeys.map((k) => (
+                <option key={k} value={k} title={colorByOptionTitle(k)}>
+                  {colorByOptionTitle(k)}
+                </option>
+              ))
+          }
         </select>
       </label>
     </div>

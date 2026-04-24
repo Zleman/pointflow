@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   COMPARE_INTERVAL_MS_MAX,
   COMPARE_INTERVAL_MS_MIN,
@@ -25,6 +25,7 @@ import {
 } from "../ui-options";
 import { generateSpiralXYZ } from "../panels/file-loader/sample-generators";
 import type { MockStreamShape } from "../utils";
+import { colorByKeysFromAttributes } from "../colorByOptions";
 
 const LABS_URL_STORAGE_KEY = "pointflow-demo-labs-arbitrary-url";
 
@@ -403,7 +404,7 @@ export function FileControlsStep() {
     const isCopc = nameLower.endsWith(".copc.laz") || nameLower.includes(".copc.");
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     const blob = URL.createObjectURL(file);
-    const hint = isCopc ? "#.copc.laz" : ((ext === "las" || ext === "laz") ? `#.${ext}` : "");
+    const hint = isCopc ? "#.copc.laz" : ((ext === "las" || ext === "laz" || ext === "pcd" || ext === "e57") ? `#.${ext}` : "");
     fileDispatch({ type: "SET_COLOR_BY", colorBy: isCopc || ext === "las" || ext === "laz" ? "classification" : "intensity" });
     fileDispatch({ type: "SET_SRC", src: blob + hint, label: file.name });
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -416,13 +417,24 @@ export function FileControlsStep() {
     window.setTimeout(() => fileDispatch({ type: "SET_SRC", src, label }), 0);
   }, [fileDispatch, fileState]);
 
+  const fileColorOptions = useMemo(
+    () => colorByKeysFromAttributes(fileState.availableAttributes),
+    [fileState.availableAttributes]
+  );
+
+  useEffect(() => {
+    if (fileColorOptions.length === 0) return;
+    if (fileColorOptions.includes(fileState.colorBy)) return;
+    fileDispatch({ type: "SET_COLOR_BY", colorBy: fileColorOptions[0] });
+  }, [fileColorOptions, fileState.colorBy, fileDispatch]);
+
   return (
     <section className="wizard-card">
       <input
         ref={fileInputRef}
         type="file"
         style={{ display: "none" }}
-        accept=".las,.laz,.copc.laz,.ply,.xyz,.csv,.txt"
+        accept=".las,.laz,.copc.laz,.ply,.pcd,.e57,.xyz,.csv,.txt"
         aria-hidden
         tabIndex={-1}
         onChange={(e) => {
@@ -537,18 +549,23 @@ export function FileControlsStep() {
       </aside>
       <p className="status-line">
         Status: {FILE_LOAD_STATUS_LABELS[fileState.status]}{fileState.status === "loading" ? ` (${Math.round(fileState.progress * 100)}%)` : ""}
+        {fileState.label && <span style={{ marginLeft: 8, opacity: 0.6, fontWeight: "normal", fontSize: "0.9em" }}>{fileState.label}</span>}
       </p>
       <div className="form-grid" style={{ marginTop: 6 }}>
         <label htmlFor="file-color-by">
           Color by
           <select
             id="file-color-by"
-            value={fileState.colorBy}
+            value={fileColorOptions.length > 0 ? fileState.colorBy : ""}
+            disabled={fileColorOptions.length === 0}
             onChange={(e) => fileDispatch({ type: "SET_COLOR_BY", colorBy: e.target.value })}
           >
-            {(fileState.availableAttributes.length > 0 ? fileState.availableAttributes : ["classification", "intensity", "z", "rgb"]).map((key) => (
-              <option key={key} value={key}>{ATTRIBUTE_KEY_LABELS[key] ?? key}</option>
-            ))}
+            {fileColorOptions.length === 0
+              ? <option value="">Loading…</option>
+              : fileColorOptions.map((key) => (
+                  <option key={key} value={key}>{ATTRIBUTE_KEY_LABELS[key] ?? key}</option>
+                ))
+            }
           </select>
         </label>
       </div>

@@ -2,6 +2,7 @@ import React, { useRef, useState, useCallback, useMemo, useEffect } from "react"
 import { useFileState, useFileDispatch } from "../contexts/FileContext";
 import { useDemoCanvas } from "../DemoContext";
 import { isCopcDatasetUrl } from "../utils";
+import { colorByKeysFromAttributes } from "../colorByOptions";
 import { buildFileSourceFromDisk } from "./file-loader/file-handlers";
 import { FileLoaderView } from "./file-loader/FileLoaderView";
 import { generateRainbowXYZ, generateSpiralXYZ } from "./file-loader/sample-generators";
@@ -93,30 +94,10 @@ export function FileLoaderPanel() {
     isReady ? "#4ade80" : isError ? "#f87171" : isLoading ? "#fbbf24" : "#94a3b8";
   const progressPct = Math.round(progress * 100);
 
-  const colorByKeys = useMemo(() => {
-    let keys: string[];
-    if (availableAttributes.length > 0) {
-      const hasRgb =
-        availableAttributes.includes("red") &&
-        availableAttributes.includes("green") &&
-        availableAttributes.includes("blue");
-      keys = availableAttributes.filter((k) => {
-        if (k === "rgb" || k === "red" || k === "green" || k === "blue") {
-          return hasRgb;
-        }
-        return true;
-      });
-    } else {
-      const isCopc = src && isCopcDatasetUrl(src);
-      keys = isCopc
-        ? ["classification", "intensity", "return_num", "gps_time", "z"]
-        : ["intensity", "z", "rgb", "red", "green", "blue"];
-    }
-    if (keys.includes("red") && keys.includes("green") && keys.includes("blue") && !keys.includes("rgb")) {
-      keys = ["rgb", ...keys];
-    }
-    return keys;
-  }, [availableAttributes, src]);
+  const colorByKeys = useMemo(
+    () => colorByKeysFromAttributes(availableAttributes),
+    [availableAttributes]
+  );
 
   useEffect(() => {
     if (colorByKeys.length === 0) return;
@@ -124,7 +105,9 @@ export function FileLoaderPanel() {
     dispatch({ type: "SET_COLOR_BY", colorBy: colorByKeys[0] });
   }, [colorByKeys, colorBy, dispatch]);
 
-  const selectValue = colorByKeys.includes(colorBy) ? colorBy : colorByKeys[0] ?? "intensity";
+  const selectValue = colorByKeys.length > 0 && colorByKeys.includes(colorBy)
+    ? colorBy
+    : colorByKeys[0] ?? "";
 
   return (
     <FileLoaderView
@@ -135,6 +118,7 @@ export function FileLoaderPanel() {
       colorBy={colorBy}
       pointCount={pointCount}
       colorByKeys={colorByKeys}
+      colorByDisabled={colorByKeys.length === 0}
       selectValue={selectValue}
       statusColor={statusColor}
       generating={generating}

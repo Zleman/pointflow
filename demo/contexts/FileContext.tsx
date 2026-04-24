@@ -9,8 +9,8 @@ export interface FileState {
   progress: number;
   colorBy: string;
   pointCount: number | null;
-  /** Attribute keys from the loaded file (COPC index or static-file HEADER). */
-  availableAttributes: string[];
+  /** null = not yet reported for this load; [] = reported and empty; string[] = reported keys. */
+  availableAttributes: string[] | null;
   /** User-visible detail when status is "error"; cleared on new load. */
   errorMessage: string | null;
 }
@@ -22,7 +22,7 @@ const initialState: FileState = {
   progress: 0,
   colorBy: "classification",
   pointCount: null,
-  availableAttributes: [],
+  availableAttributes: null,
   errorMessage: null,
 };
 
@@ -46,7 +46,7 @@ function fileReducer(state: FileState, action: FileAction): FileState {
         status: action.src ? "loading" : "idle",
         progress: 0,
         pointCount: null,
-        availableAttributes: [],
+        availableAttributes: null,
         errorMessage: null,
       };
     case "SET_COLOR_BY":

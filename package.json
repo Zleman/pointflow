@@ -32,6 +32,10 @@
     "./config": {
       "types": "./dist/config/index.d.ts",
       "import": "./dist/config/index.js"
+    },
+    "./e57": {
+      "types": "./dist/e57.d.ts",
+      "import": "./dist/e57.js"
     }
   },
   "files": [
@@ -60,14 +64,14 @@
   },
   "sideEffects": false,
   "peerDependencies": {
-    "@react-three/drei": "^9.0.0",
+    "@react-three/drei": "^9.0.0 || ^10.0.0",
     "@react-three/fiber": "^9.0.0",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0",
     "three": "^0.160.0 || ^0.170.0"
   },
   "devDependencies": {
-    "@react-three/drei": "^9.0.0",
+    "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.0.0",
     "@testing-library/dom": "^10.0.0",
     "@testing-library/jest-dom": "^6.0.0",
