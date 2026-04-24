@@ -6,6 +6,23 @@ sidebar_position: 99
 
 # Changelog
 
+## v0.1.1 — PCD/E57 support, GPU point picking, color-by fix
+
+### Added
+
+- **PCD format** — ASCII, binary, and binary-compressed (LZ4) variants. Auto-detected from `.pcd` extension. RGB float-bitcast unpacked to `red`/`green`/`blue` channels. ROS-native; works directly with ROS bag extracted clouds.
+- **E57 format** — ASTM E2807 standard output of Leica, FARO, Trimble, and Matterport scanners. Bit-pack codec, multi-scan files, intensity normalisation, `colorRed`/`colorGreen`/`colorBlue` channels. Auto-detected from `.e57` extension.
+- **GPU point picking on WebGPU** — on click, a second render pass in the same GPU command encoder draws all visible points into an R32Uint texture encoding ring-buffer slot indices. One pixel is copied to a staging buffer and read back within one frame (~16ms). DPR scaling applied for correct results on HiDPI displays. The WebGL path falls back to CPU `pickNearest` unchanged.
+- **CI quality gate** — TypeScript typecheck and full test suite now run on every push in addition to the Vite build.
+
+### Fixed
+
+- **Stale closure in worker bridge** — `onRawIngest` in `usePointFlow` now reads from a ref updated on every render. A new callback takes effect without toggling `workerMode`.
+- **Color-by attribute pipeline** — `availableAttributes` now uses `null` as the "not yet reported" sentinel instead of `[]`. The color dropdown no longer locks to `z` while COPC attributes are still loading.
+- **React 19 peer compatibility** — upgraded `@react-three/drei` to v10, which declares React 19 in its peer range. `npm ls` no longer reports `ELSPROBLEMS`.
+
+---
+
 ## v0.1.0 — Initial public release
 
 ### What's in this release

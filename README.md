@@ -53,13 +53,13 @@ PointFlow is designed for the live-data case. It keeps memory bounded by design,
 | GPU frustum culling (WebGPU) | Only visible points drawn; compute shader compacts to drawIndirect |
 | Auto LOD by camera distance | Render budget spent on near points; far points downsampled |
 | Unified importance engine (M8.5) | One scalar field drives both buffer eviction and per-frame render sampling |
-| Static file loading (`<PointCloud src="..." />`) | PLY, XYZ, and LAS 1.0–1.4 files, off-thread parsing, progressive rendering |
+| Static file loading (`<PointCloud src="..." />`) | PLY, XYZ, LAS 1.0–1.4, PCD (ASCII/binary/compressed), E57 — off-thread parsing, progressive rendering |
 | Unified static source API | `src` accepts `string`, `URL`, `Request`, `File`, or `Blob` |
 | LAZ (compressed LAS) loading (M9b) | `import { createLazLoader } from "pointflow/laz"` — laz-perf WASM inlined, no extra fetch |
 | Built-in file dropzone | `<PointCloudDropzone>` for drag/drop + picker workflows |
 | Import-based config module | `pointflow/config` centralizes defaults with deterministic precedence |
 | Attribute-based color mapping | Any numeric field (velocity, uncertainty, pressure) mapped to a color palette |
-| CPU point picking (M9.1) | `onPointPick` callback; click any point to receive its world coordinates + attributes |
+| GPU point picking (WebGPU) / CPU fallback (WebGL) | `onPointPick` callback; click any point to receive its world coordinates + attributes; WebGPU resolves within one frame, no O(N) CPU scan |
 | 16-bit quantized transport (M9.2) | Binary WebSocket adapter; 6 bytes/point wire cost vs 12 bytes float32 |
 | COPC streaming (M10) | `<CopcPointCloud>` from `pointflow/copc`; HTTP range requests, LRU tile cache, frustum+LOD selection |
 | COPC prefetch strategies | `prefetchStrategy`: `frustum-priority`, `depth-first`, `nearest`, `bandwidth-saver` |
@@ -76,7 +76,7 @@ PointFlow is designed for the live-data case. It keeps memory bounded by design,
 |---|---|---|---|---|
 | Live streaming | Yes — purpose-built | No (static octree tiles) | Partial (batch updates) | Manual |
 | Bounded memory | Yes — ring buffer | No (loads all tiles) | No | Manual |
-| Static file loading | Yes — PLY, XYZ, LAS 1.0–1.4, LAZ (opt-in) | Yes — LAZ/LAS/COPC | Limited | Manual |
+| Static file loading | Yes — PLY, XYZ, LAS, LAZ (opt-in), PCD, E57 | Yes — LAZ/LAS/COPC | Limited | Manual |
 | WebGPU rendering | Yes | No | No | No |
 | Importance-driven eviction + rendering | Yes — unified score | No | No | No |
 | React-native API | Yes — hooks + components | No | Partial (layer API) | No |
@@ -513,7 +513,7 @@ Full model specification: see the [importance engine guide](https://pointflow-do
 
 ---
 
-## CPU point picking (M9.1)
+## Point picking
 
 Click any rendered point to receive its world coordinates and attributes via the `onPointPick` callback.
 
@@ -533,11 +533,13 @@ Click any rendered point to receive its world coordinates and attributes via the
 />
 ```
 
-`<PointCloud>` exposes the same two props.
+`<PointCloud>` exposes the same props.
 
-**How it works:** Both the WebGPU and WebGL scene components write the current VP matrix to a shared `vpRef` on every frame. On `pointerdown`, `PointBuffer.pickNearest()` projects all buffered points into screen space in O(N), returns a point within `pickRadius` using `pickStrategy` (`highestImportance`, `nearest`, or `recentFirst`), or `null` when the click misses.
+**WebGPU path:** on click, a second render pass runs in the same GPU command encoder and encodes ring-buffer slot indices into an R32Uint texture. One pixel is read back asynchronously — result arrives within one frame with no O(N) CPU work. DPR scaling applied for HiDPI displays.
 
-**Stacked-point behaviour:** When multiple points project to the same pixel, the one with the highest `importance` value wins. Screen distance is the tiebreaker only when importance is equal.
+**WebGL path (fallback):** `PointBuffer.pickNearest()` projects all buffered points into screen space in O(N) on `pointerdown`.
+
+**Stacked-point behaviour:** when multiple points project to the same pixel, the one with the highest `importance` value wins. Screen distance is the tiebreaker only when importance is equal.
 
 ---
 

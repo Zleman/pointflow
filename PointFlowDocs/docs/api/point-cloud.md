@@ -6,7 +6,7 @@ sidebar_position: 2
 
 # PointCloud
 
-Static file loader with progressive rendering. Accepts PLY, XYZ, LAS, and (with `loaderFactory`) LAZ.
+Static file loader with progressive rendering. Accepts PLY, XYZ, LAS, PCD, E57, and (with `loaderFactory`) LAZ.
 
 ```tsx
 import { PointCloud } from "pointflow";

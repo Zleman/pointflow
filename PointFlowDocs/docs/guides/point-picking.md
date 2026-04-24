@@ -69,9 +69,11 @@ When multiple points fall within the radius, `pickStrategy` decides which one wi
 
 ## How it works
 
-On every frame, the scene component writes the current VP matrix to a shared ref. On `pointerdown`, `PointBuffer.pickNearest()` projects all buffered points into screen space in O(N) and returns the best match within `pickRadius`. It runs on the CPU in both WebGPU and WebGL modes.
+**WebGPU path (default when available):** On click, a second render pass runs in the same GPU command encoder. It draws all visible points into an R32Uint texture, encoding each point's ring-buffer slot index. One pixel under the cursor is copied to a staging buffer and read back asynchronously — the result arrives within one frame (~16ms at 60fps). No CPU iteration over the point buffer.
 
-For large buffers (500k+ points), picking can take a few milliseconds. If that's a concern, consider reducing `pickRadius` to narrow the candidate set, or debouncing the `pointerdown` handler.
+**WebGL path (fallback):** On every frame, the scene component writes the current VP matrix to a shared ref. On `pointerdown`, `PointBuffer.pickNearest()` projects all buffered points into screen space in O(N) and returns the best match within `pickRadius`.
+
+For large buffers on the WebGL path (500k+ points), picking can take a few milliseconds. If that's a concern, reduce `pickRadius` to narrow the candidate set, or debounce the `pointerdown` handler. The WebGPU path has no such overhead.
 
 ## Null result
 

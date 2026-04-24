@@ -16,6 +16,8 @@ sidebar_position: 2
 | XYZ / CSV | `.xyz`, `.csv`, `.txt` | Whitespace or comma-delimited, optional header row |
 | LAS | `.las` | LAS 1.0 through 1.4 |
 | LAZ | `.laz` | Requires `loaderFactory={createLazLoader}` from `pointflow/laz` |
+| PCD | `.pcd` | ASCII, binary, and binary-compressed (LZ4). ROS-native format. RGB float-bitcast decoded to `red`/`green`/`blue`. |
+| E57 | `.e57` | ASTM E2807. Multi-scan files supported. Intensity and colour channels. |
 | COPC | `.copc.laz` | Use `<CopcPointCloud>` from `pointflow/copc` instead |
 
 ## Basic usage
@@ -110,6 +112,26 @@ import { createLazLoader } from "pointflow/laz";
 ```
 
 The same `loaderFactory` works for plain `.las` files too. The laz-perf WASM decoder is inlined, so no additional fetches or CDN dependencies.
+
+## Loading PCD files
+
+PCD is the native format for ROS point cloud topics. All three data variants are supported:
+
+```tsx
+<PointCloud src="/scan.pcd" colorBy="intensity" />
+```
+
+Format auto-detected from the `.pcd` extension. RGB packing is decoded automatically — when a `rgb` or `rgba` field is present, the float bitcast is unpacked and exposed as `red`, `green`, `blue` channels (0–1). Use `colorBy="rgb"` to render full colour.
+
+## Loading E57 files
+
+E57 (ASTM E2807) is the standard output of professional scanners — Leica, FARO, Trimble, Matterport.
+
+```tsx
+<PointCloud src="/scan.e57" colorBy="intensity" />
+```
+
+Format auto-detected from the `.e57` extension. Multi-scan files work — all scans are emitted sequentially into the same ring buffer. Intensity is normalised by `intensityMaximum` when the field is present. Colour channels (`colorRed`, `colorGreen`, `colorBlue`) are exposed as `red`, `green`, `blue` (0–1); use `colorBy="rgb"` to render full colour.
 
 ## Cancellation
 

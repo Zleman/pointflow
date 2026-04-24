@@ -77,6 +77,19 @@ Two sets of position and attribute storage buffers alternate each tick: one is b
 
 **`maxStorageBufferBindingSize`:** GPU devices cap the size of storage buffers, typically at 128–512 MB. PointFlow checks this at initialization and silently caps `maxPoints` if the requested size would exceed the device limit. Use `onRendererResolved` and the active policy to see the effective budget.
 
+## GPU point picking
+
+On `pointerdown`, a second render pass is added to the same command encoder (after the compute pass, before the main draw). The picking pass:
+
+1. Renders all visible points (via the same `drawIndirect` buffer) into a full-resolution R32Uint texture.
+2. Each fragment writes `visibleSlot[instanceIndex] + 1` — the ring-buffer slot of the point, offset by one so that 0 means "nothing drawn here".
+3. A 1×1 region at the click coordinates is copied to a 256-byte staging buffer via `copyTextureToBuffer`.
+4. After `device.queue.submit`, the staging buffer is mapped asynchronously. The encoded value is decoded back to a ring-buffer slot and the CPU ring buffer returns the point's XYZ and attributes.
+
+Coordinates are scaled by the actual device pixel ratio (canvas device pixels / CSS pixels) before the texture read, so the result is correct on HiDPI displays.
+
+The picking pass adds no per-frame cost — it only runs in the frame where a click lands.
+
 ## WebGL fallback
 
 The WebGL path achieves the same visible output through CPU-side operations:
